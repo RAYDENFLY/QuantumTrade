@@ -18,6 +18,9 @@ Thumbs.db
 .env
 .env.*
 
+design-sistem.md
+planning.md
+
 # Logs
 *.log
 

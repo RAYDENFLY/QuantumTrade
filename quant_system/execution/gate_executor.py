@@ -248,6 +248,34 @@ class GateExecutor:
             return res
         return [res]
 
+    def get_contracts(self) -> List[Dict[str, Any]]:
+        """List USDT futures contracts.
+
+        Endpoint:
+            GET /futures/usdt/contracts
+
+        This is used for metadata like contract size / multiplier so we can
+        normalize quantities and match Gate UI PnL.
+        """
+        path = "/futures/usdt/contracts"
+        res = self._request_json("GET", path, params=None, payload=None)
+        if isinstance(res, list):
+            return res
+        return [res]
+
+    def get_contract_detail(self, contract: str) -> Dict[str, Any]:
+        """Fetch single contract metadata.
+
+        Endpoint:
+            GET /futures/usdt/contracts/{contract}
+        """
+        path = f"/futures/usdt/contracts/{contract}"
+        res = self._request_json("GET", path, params=None, payload=None)
+        if isinstance(res, dict):
+            return res
+        # Some Gate responses might wrap; keep best-effort.
+        return {"data": res}
+
     def get_open_trigger_orders(self, *, contract: Optional[str] = None) -> List[Dict[str, Any]]:
         """List open futures trigger/plan orders.
 

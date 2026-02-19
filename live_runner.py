@@ -43,6 +43,10 @@ from quant_system.model.predict import Signal, SignalGenerator
 from quant_system.risk.risk_manager import RiskManager
 
 
+BREAKERS_DIR = Path(__file__).resolve().parent / "breakers"
+PANIC_CLOSE_FILE = BREAKERS_DIR / "PANIC_CLOSE_ALL"
+
+
 def _interval_from_timeframe(timeframe: str) -> str:
     tf = str(timeframe).upper()
     if tf == "4H":
@@ -393,6 +397,25 @@ def _fills_summary_for_order(
     return vwap, fee_sum, pnl_sum
 
 
+def _get_quanto_multiplier(executor: GateExecutor, *, contract: str) -> float:
+    """Gate futures quantity multiplier.
+
+    Some contracts represent multiple coin units per 1 `size`.
+    Gate exposes this via `quanto_multiplier` in contract detail.
+
+    We use this to store journal quantities in the same units as Gate UI.
+    """
+    try:
+        meta = executor.get_contract_detail(contract)
+        qm = meta.get("quanto_multiplier")
+        if qm is None:
+            return 1.0
+        qmf = float(qm)
+        return qmf if qmf > 0 else 1.0
+    except Exception:
+        return 1.0
+
+
 def run_live(config_path: Path) -> None:
     # Load local .env for convenience in dev (does nothing if file missing).
     # Production should set real environment variables via the OS / secret manager.
@@ -509,6 +532,59 @@ def run_live(config_path: Path) -> None:
 
     while True:
         try:
+            # ------------------------------------------------------------
+            # PANIC BREAKER: force close all open positions (manual trigger)
+            # How to use:
+            #   - create file: breakers/PANIC_CLOSE_ALL
+            # The runner will:
+            #   1) close all positions via reduce direction market orders
+            #   2) set runner_state panic_close_active=true
+            #   3) skip entries while the file exists
+            # ------------------------------------------------------------
+            try:
+                if PANIC_CLOSE_FILE.exists():
+                    BREAKERS_DIR.mkdir(parents=True, exist_ok=True)
+                    journal.set_state_value("panic_close_active", "true", pd.Timestamp.utcnow())
+
+                    positions_now = executor.get_open_positions() or []
+                    closed_any = False
+                    for p in positions_now:
+                        try:
+                            contract = str(p.get("contract", ""))
+                            if not contract:
+                                continue
+                            size_raw = p.get("size", 0)
+                            size = float(size_raw)
+                            if size == 0:
+                                continue
+                            # Reduce-only isn't supported on this endpoint in our adapter;
+                            # we send the opposite signed size to flatten.
+                            close_size = -int(size)
+                            if close_size == 0:
+                                continue
+                            executor.place_market_order(contract=contract, size=close_size)
+                            closed_any = True
+                            time.sleep(0.2)
+                        except Exception as e:
+                            log.error("PANIC_CLOSE failed for contract=%s err=%s", p.get("contract"), e)
+                            continue
+
+                    if closed_any:
+                        log.warning("PANIC_CLOSE_ALL executed: attempted to flatten all open positions.")
+                    else:
+                        log.warning("PANIC_CLOSE_ALL active but no open positions found.")
+
+                    # While breaker exists, do not run normal trading logic.
+                    time.sleep(5)
+                    continue
+                else:
+                    # Clear the flag when breaker file is removed.
+                    if journal.get_state_value("panic_close_active") == "true":
+                        journal.set_state_value("panic_close_active", "false", pd.Timestamp.utcnow())
+            except Exception:
+                # Never block the main loop on breaker state IO.
+                pass
+
             # Equity must come from exchange.
             equity = float(executor.get_account_equity())
             time.sleep(0.2)
@@ -620,6 +696,18 @@ def run_live(config_path: Path) -> None:
                     # Exchange is flat: detect whether TP or SL executed.
                     exit_reason = "EXCHANGE_CLOSE"
                     exit_order_id: Optional[str] = None
+
+                    # If we previously sent a close order (signal-close path), prefer that order id for fills.
+                    # This makes realized PnL accurate and avoids placeholder math.
+                    try:
+                        last_oid = journal.get_state_value(f"last_close_order_id_{contract}")
+                    except Exception:
+                        last_oid = None
+                    if last_oid:
+                        exit_order_id = str(last_oid)
+                        # If user enabled dynamic close, keep reason SIGNAL_CLOSE; otherwise treat as MANUAL_CLOSE
+                        # because it is a discretionary close not caused by TP/SL trigger.
+                        exit_reason = "SIGNAL_CLOSE" if close_on_signal_change else "MANUAL_CLOSE"
                     # If a trigger order exists and is finished, use that.
                     for key, reason in (("tp_order_id", "TAKE_PROFIT"), ("sl_order_id", "STOP_LOSS")):
                         oid = t.get(key)
@@ -644,6 +732,15 @@ def run_live(config_path: Path) -> None:
                     qty = float(t.get("qty") or 0.0)
                     side = str(t.get("side") or "LONG")
                     center_ts = pd.Timestamp.utcnow().tz_localize("UTC")
+
+                    # Journal qty should be in Gate UI units; ensure it's normalized.
+                    # (Older rows might still be base size.)
+                    qm = _get_quanto_multiplier(executor, contract=contract)
+                    if qty > 0 and qm != 1.0:
+                        # Heuristic: if qty looks like base size, upscale.
+                        # Example: XRP base size 63 but UI qty 630.
+                        if qty < qm * 2:
+                            qty = float(qty * qm)
 
                     exit_px = entry_px
                     exit_fee = 0.0
@@ -673,15 +770,44 @@ def run_live(config_path: Path) -> None:
                         fee_rate=float(cfg["execution"]["fee_rate"]),
                         exit_order_id=exit_order_id,
                     )
-                    if exit_fee:
-                        closure["fees"] = float(exit_fee)
+
+                    # Prefer exchange-derived fees when available.
+                    # Total fees should include entry-side fee (if recorded) + exit-side fee (from fills).
+                    try:
+                        entry_fee = float(t.get("entry_fee") or 0.0)
+                    except Exception:
+                        entry_fee = 0.0
+
+                    if exit_fee or entry_fee:
+                        closure["fees"] = float(entry_fee + float(exit_fee or 0.0))
+
+                        # If we're not using exchange-provided realized pnl, recompute pnl from gross-fees.
+                        # (gross_pnl is already in UI qty units because qty is).
+                        try:
+                            closure["pnl"] = float(closure.get("gross_pnl", 0.0)) - float(closure.get("fees", 0.0))
+                        except Exception:
+                            pass
+
                     if realized_pnl is not None:
+                        # Gate's realized_pnl (if present) is reported in USDT (already fee-aware on Gate side).
+                        # Keep it as-is, but still keep our fee breakdown.
                         closure["pnl"] = float(realized_pnl)
+                        try:
+                            closure["gross_pnl"] = float(realized_pnl) + float(closure.get("fees", 0.0))
+                        except Exception:
+                            pass
                     # Link to trade_id directly for accuracy.
                     closure["trade_id"] = int(t.get("trade_id"))
 
                     journal.log_trade_exit(closure)
                     journal.update_equity(ts=center_ts, equity=equity)
+
+                    # Clear last close hint to avoid reusing it.
+                    if last_oid:
+                        try:
+                            journal.set_state_value(f"last_close_order_id_{contract}", "", pd.Timestamp.utcnow())
+                        except Exception:
+                            pass
                 except Exception:
                     log.exception("Reconciliation failed for open trade: %s", t)
 
@@ -724,65 +850,25 @@ def run_live(config_path: Path) -> None:
                     close_res = executor.close_position(contract)
                     time.sleep(0.2)
                     if close_res is not None:
-                        # Prefer exchange fills.
+                        # IMPORTANT:
+                        # Do NOT journal a closure here.
+                        # Rationale:
+                        # - On signal-close we often cannot recover entry_price/qty precisely from Gate without
+                        #   extra endpoints, so any PnL we write can be wrong.
+                        # - We instead rely on the reconciliation block above:
+                        #     journal OPEN trade + exchange flat => fetch fills by exit_order_id (TP/SL/manual)
+                        #   and log an accurate closure (or best-effort EXCHANGE_CLOSE).
                         close_order_id = str(close_res.get("id", ""))
-                        exit_px: float
-                        exit_fee: float = 0.0
-                        realized_pnl: Optional[float] = None
                         if close_order_id:
-                            # Use my_trades for fill-accurate exit price/fees/pnl.
-                            vwap, fee, rpnl = _fills_summary_for_order(
-                                executor,
-                                contract=contract,
-                                order_id=close_order_id,
-                                center_ts=latest_closed_ts[asset],
+                            journal.set_state_value(
+                                f"last_close_order_id_{contract}",
+                                close_order_id,
+                                pd.Timestamp.utcnow(),
                             )
-                            if vwap is not None:
-                                exit_px = float(vwap)
-                            else:
-                                row = latest_feats[latest_feats["asset"] == asset]
-                                exit_px = float(row["close"].iloc[0]) if not row.empty else 0.0
-                            if fee is not None:
-                                exit_fee = float(fee)
-                            realized_pnl = rpnl
-                        else:
-                            row = latest_feats[latest_feats["asset"] == asset]
-                            exit_px = float(row["close"].iloc[0]) if not row.empty else 0.0
-
-                        # We don’t reliably have entry_price/qty from Gate here without extra endpoints.
-                        # We journal a minimal closure to keep the audit trail; PnL is best-effort.
-                        side = "LONG" if pos_dir > 0 else "SHORT"
-                        qty = abs(pos_dir)  # placeholder, overwritten if we can parse size
-                        for p in positions:
-                            if str(p.get("contract")) == contract:
-                                try:
-                                    qty = float(abs(int(float(p.get("size", 0)))))
-                                except Exception:
-                                    qty = float(qty)
-                                break
-
-                        closure = _mk_exit_journal_record(
-                            ts=latest_closed_ts[asset],
-                            asset=asset,
-                            side=side,
-                            qty=qty,
-                            # Without querying historical entry orders, we cannot recover entry_price reliably.
-                            # We keep entry_price=exit_px as placeholder; realized pnl is not computed here.
-                            entry_price=exit_px,
-                            exit_price=exit_px,
-                            exit_reason="SIGNAL_CLOSE",
-                            fee_rate=float(cfg["execution"]["fee_rate"]),
-                            exit_order_id=close_order_id or None,
+                        log.warning(
+                            "Signal-close sent to exchange (contract=%s), closure will be recorded by reconciliation to avoid wrong PnL.",
+                            contract,
                         )
-                        # Override from exchange fills where available.
-                        if exit_fee:
-                            closure["fees"] = float(exit_fee)
-                        if realized_pnl is not None and realized_pnl != 0.0:
-                            closure["pnl"] = float(realized_pnl)
-                        journal.log_trade_exit(closure)
-                        # Equity is sourced from exchange; we still keep a local equity curve snapshot.
-                        journal.update_equity(ts=latest_closed_ts[asset], equity=equity)
-                        log.info("Position closed and journaled: asset=%s", asset)
                 elif (not close_on_signal_change) and pos_dir != 0 and sig_dir != pos_dir:
                     # Visibility log only. Do not close.
                     log.info(
@@ -811,6 +897,13 @@ def run_live(config_path: Path) -> None:
                 sig = sig_by_asset.get(asset)
                 if sig is None or pos_dir != 0:
                     continue
+
+                # Gate futures `size` must be a non-zero integer (contracts).
+                # We enforce a minimum size of 1 contract to avoid a hard failure
+                # when RiskManager's float qty truncates to 0.
+                min_contract_size = int((cfg.get("execution") or {}).get("min_contract_size", 1) or 1)
+                if min_contract_size < 1:
+                    min_contract_size = 1
 
                 # Enforce max open pairs cap.
                 if max_open_pairs > 0 and contract not in open_contracts and len(open_contracts) >= max_open_pairs:
@@ -853,7 +946,21 @@ def run_live(config_path: Path) -> None:
                 time.sleep(0.2)
 
                 # Gate size must be signed integer.
-                signed_size = int(rm["qty"]) if sig.side == "LONG" else -int(rm["qty"])
+                # RiskManager returns float qty; if it truncates to 0, we must skip (or clamp).
+                raw_qty = float(rm.get("qty", 0.0) or 0.0)
+                qty_int = int(raw_qty)
+                if qty_int < min_contract_size:
+                    log.warning(
+                        "Computed qty rounds to 0/smaller-than-min; skipping entry to avoid invalid order: asset=%s contract=%s raw_qty=%.6f qty_int=%d min_contract_size=%d",
+                        asset,
+                        contract,
+                        raw_qty,
+                        qty_int,
+                        min_contract_size,
+                    )
+                    continue
+
+                signed_size = qty_int if sig.side == "LONG" else -qty_int
                 order = executor.place_market_order(
                     contract=contract,
                     size=signed_size,
@@ -909,7 +1016,7 @@ def run_live(config_path: Path) -> None:
                     ts=latest_closed_ts[asset],
                     asset=asset,
                     side=sig.side,
-                    qty=float(abs(signed_size)),
+                    qty=float(abs(signed_size)) * _get_quanto_multiplier(executor, contract=contract),
                     entry_price=entry_px,
                     stop_price=float(rm["stop_price"]),
                     stop_distance=float(rm["stop_distance"]),
