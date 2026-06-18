@@ -42,3 +42,8 @@ quant_system/reports/
 node_modules/
 dist/
 build/
+
+# Agent runtime state (written at runtime, not for version control)
+agent/.runner_flags.yaml
+agent/agent.sqlite
+agent/__pycache__/

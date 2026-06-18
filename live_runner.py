@@ -279,7 +279,7 @@ def _ensure_tpsl_for_position(
     sl_price: Optional[float],
     trigger_rule: int,
     log: logging.Logger,
-) -> None:
+) -> Dict[str, Optional[str]]:
     """Best-effort: ensure TP/SL trigger orders exist on exchange for an open position.
 
     This addresses cases where:
@@ -289,8 +289,10 @@ def _ensure_tpsl_for_position(
       - orders were canceled server-side.
     """
 
+    replaced: Dict[str, Optional[str]] = {"tp_order_id": None, "sl_order_id": None}
+
     if abs_size <= 0:
-        return
+        return replaced
 
     desired_close_side = "sell" if str(side).upper() == "LONG" else "buy"
 
@@ -325,7 +327,10 @@ def _ensure_tpsl_for_position(
         except Exception:
             return None
 
-    def _is_ok(o: Dict[str, Any]) -> bool:
+    expected_tp_rule = 1 if str(side).upper() == "LONG" else 2
+    expected_sl_rule = 2 if str(side).upper() == "LONG" else 1
+
+    def _is_ok(o: Dict[str, Any], *, expected_rule: int) -> bool:
         # Validate order_type matches desired side.
         ot = _order_type(o)
         if ot:
@@ -337,7 +342,7 @@ def _ensure_tpsl_for_position(
         if osz is None or osz != int(abs_size):
             return False
         r = _rule(o)
-        if r is not None and int(r) != int(trigger_rule):
+        if r is not None and int(r) != int(expected_rule):
             return False
         return True
 
@@ -357,7 +362,7 @@ def _ensure_tpsl_for_position(
         open_triggers = executor.get_open_trigger_orders(contract=contract)
     except Exception:
         log.exception("Failed to list trigger orders for %s", contract)
-        return
+        return replaced
 
     log.info(
         "TPSL-resync contract=%s side=%s abs_size=%d tp=%.6g sl=%.6g open_triggers=%d",
@@ -379,11 +384,11 @@ def _ensure_tpsl_for_position(
 
     # Replace TP if missing or mismatched.
     if tp_price is not None:
-        keep = [o for o in tp_orders if _is_ok(o)]
+        keep = [o for o in tp_orders if _is_ok(o, expected_rule=expected_tp_rule)]
         if keep:
             log.info("TPSL-resync TP already OK for %s (order_id=%s)", contract, keep[0].get("id"))
         else:
-            stale = [o for o in tp_orders if not _is_ok(o)]
+            stale = [o for o in tp_orders if not _is_ok(o, expected_rule=expected_tp_rule)]
             if stale:
                 log.warning(
                     "TPSL-resync cancelling stale TP orders for %s: %s",
@@ -405,16 +410,18 @@ def _ensure_tpsl_for_position(
                     "TPSL-resync placed TP for %s: order_id=%s trigger_price=%.6g",
                     contract, tp_resp.get("id"), tp_price,
                 )
+                if tp_resp.get("id"):
+                    replaced["tp_order_id"] = str(tp_resp.get("id"))
             except Exception:
                 log.exception("Failed to (re)place TP trigger for %s", contract)
 
     # Replace SL if missing or mismatched.
     if sl_price is not None:
-        keep = [o for o in sl_orders if _is_ok(o)]
+        keep = [o for o in sl_orders if _is_ok(o, expected_rule=expected_sl_rule)]
         if keep:
             log.info("TPSL-resync SL already OK for %s (order_id=%s)", contract, keep[0].get("id"))
         else:
-            stale = [o for o in sl_orders if not _is_ok(o)]
+            stale = [o for o in sl_orders if not _is_ok(o, expected_rule=expected_sl_rule)]
             if stale:
                 log.warning(
                     "TPSL-resync cancelling stale SL orders for %s: %s",
@@ -436,8 +443,12 @@ def _ensure_tpsl_for_position(
                     "TPSL-resync placed SL for %s: order_id=%s trigger_price=%.6g",
                     contract, sl_resp.get("id"), sl_price,
                 )
+                if sl_resp.get("id"):
+                    replaced["sl_order_id"] = str(sl_resp.get("id"))
             except Exception:
                 log.exception("Failed to (re)place SL trigger for %s", contract)
+
+    return replaced
 
 
 def _position_direction_for_contract(positions: List[Dict[str, Any]], contract: str) -> int:
@@ -598,7 +609,7 @@ def _fills_summary_for_order(
     qty_sum = 0.0
     px_qty_sum = 0.0
     fee_sum = 0.0
-    pnl_sum = 0.0
+    pnl_sum: Optional[float] = 0.0
 
     for t in matched:
         # Common fill fields.
@@ -614,15 +625,26 @@ def _fills_summary_for_order(
             fee = float(t.get("fee", t.get("fees", 0.0)))
         except Exception:
             fee = 0.0
-        try:
-            rpnl = float(t.get("realized_pnl", t.get("pnl", 0.0)))
-        except Exception:
-            rpnl = 0.0
+        rpnl_raw = None
+        for k in ("realized_pnl", "realised_pnl", "pnl", "profit", "realized_profit", "realised_profit"):
+            if k in t and t.get(k) is not None:
+                rpnl_raw = t.get(k)
+                break
+        if rpnl_raw is None:
+            rpnl = None
+        else:
+            try:
+                rpnl = float(rpnl_raw)
+            except Exception:
+                rpnl = None
 
         qty_sum += abs(size)
         px_qty_sum += abs(size) * price
         fee_sum += fee
-        pnl_sum += rpnl
+        if rpnl is None:
+            pnl_sum = None
+        elif pnl_sum is not None:
+            pnl_sum += rpnl
 
     vwap = (px_qty_sum / qty_sum) if qty_sum > 0 else None
     return vwap, fee_sum, pnl_sum
@@ -645,6 +667,307 @@ def _get_quanto_multiplier(executor: GateExecutor, *, contract: str) -> float:
         return qmf if qmf > 0 else 1.0
     except Exception:
         return 1.0
+
+
+def _utc_now() -> pd.Timestamp:
+    ts = pd.Timestamp.utcnow()
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _as_utc_timestamp(value: Any) -> pd.Timestamp:
+    ts = pd.Timestamp(value)
+    if ts.tzinfo is None:
+        return ts.tz_localize("UTC")
+    return ts.tz_convert("UTC")
+
+
+def _gross_pnl_from_prices(*, side: str, qty: float, entry_price: float, exit_price: float) -> float:
+    if str(side).upper() == "LONG":
+        return float((exit_price - entry_price) * qty)
+    return float((entry_price - exit_price) * qty)
+
+
+def _repair_recent_closures_from_gate(
+    *,
+    journal: Journal,
+    executor: GateExecutor,
+    cfg: Dict[str, Any],
+    log: logging.Logger,
+    limit: int = 100,
+) -> None:
+    """Repair recent closure rows from Gate fills; Gate realized PnL wins when present."""
+    try:
+        rows = journal.get_recent_closures_for_repair(limit=limit)
+    except Exception:
+        log.exception("Closure repair: failed to read recent closures")
+        return
+
+    for r in rows:
+        try:
+            exit_order_id = str(r.get("exit_order_id") or "").strip()
+            if not exit_order_id:
+                continue
+
+            contract = _gate_contract_for_asset(str(r.get("asset")))
+            closure_ts = _as_utc_timestamp(r.get("timestamp"))
+            exit_vwap, exit_fee, exchange_rpnl = _fills_summary_for_order(
+                executor,
+                contract=contract,
+                order_id=exit_order_id,
+                center_ts=closure_ts,
+                window_sec=6 * 3600,
+            )
+            if exit_vwap is None:
+                continue
+
+            entry_price = float(r.get("entry_price") or 0.0)
+            entry_fee = float(r.get("entry_fee") or 0.0)
+            qty = float(r.get("qty") or 0.0)
+
+            entry_order_id = str(r.get("entry_order_id") or "").strip()
+            trade_id = r.get("trade_id")
+            if entry_order_id:
+                try:
+                    entry_center = _as_utc_timestamp(r.get("entry_ts") or r.get("timestamp"))
+                    entry_vwap, gate_entry_fee, _ = _fills_summary_for_order(
+                        executor,
+                        contract=contract,
+                        order_id=entry_order_id,
+                        center_ts=entry_center,
+                        window_sec=12 * 3600,
+                    )
+                    if entry_vwap is not None:
+                        entry_price = float(entry_vwap)
+                    if gate_entry_fee is not None:
+                        entry_fee = float(gate_entry_fee)
+                    if trade_id is not None:
+                        journal.update_trade_entry_fill(
+                            int(trade_id),
+                            entry_price=entry_price,
+                            entry_fee=entry_fee,
+                        )
+                except Exception:
+                    log.exception("Closure repair: failed entry-fill lookup contract=%s order_id=%s", contract, entry_order_id)
+
+            total_fees = float(entry_fee + float(exit_fee or 0.0))
+            gross_pnl = _gross_pnl_from_prices(
+                side=str(r.get("side") or "LONG"),
+                qty=qty,
+                entry_price=entry_price,
+                exit_price=float(exit_vwap),
+            )
+            pnl = float(gross_pnl - total_fees)
+
+            if exchange_rpnl is not None:
+                pnl = float(exchange_rpnl)
+                gross_pnl = float(pnl + total_fees)
+
+            journal.log_trade_exit(
+                {
+                    "trade_id": int(trade_id) if trade_id is not None else None,
+                    "timestamp": closure_ts,
+                    "asset": r.get("asset"),
+                    "side": r.get("side"),
+                    "qty": qty,
+                    "exit_order_id": exit_order_id,
+                    "entry_price": entry_price,
+                    "exit_price": float(exit_vwap),
+                    "exit_reason": r.get("exit_reason") or "EXCHANGE_CLOSE",
+                    "gross_pnl": gross_pnl,
+                    "fees": total_fees,
+                    "pnl": pnl,
+                }
+            )
+        except Exception:
+            log.exception("Closure repair failed for row=%s", r)
+
+
+def _reconcile_journal_with_exchange(
+    *,
+    journal: Journal,
+    executor: GateExecutor,
+    positions: List[Dict[str, Any]],
+    equity: float,
+    cfg: Dict[str, Any],
+    close_on_signal_change: bool,
+    log: logging.Logger,
+) -> None:
+    """Close OPEN journal rows when the exchange position is already flat."""
+    try:
+        open_trades = journal.get_open_trades()
+    except Exception:
+        open_trades = []
+
+    pos_size_by_contract: Dict[str, float] = {}
+    for p in positions:
+        try:
+            c = str(p.get("contract", ""))
+            if not c:
+                continue
+            pos_size_by_contract[c] = float(p.get("size", 0) or 0)
+        except Exception:
+            continue
+
+    journal_contracts = set()
+    for t in open_trades:
+        try:
+            journal_contracts.add(_gate_contract_for_asset(str(t.get("asset"))))
+        except Exception:
+            continue
+
+    for p in positions:
+        try:
+            contract = str(p.get("contract") or "")
+            size = float(p.get("size", 0) or 0)
+            if contract and size != 0.0 and contract not in journal_contracts:
+                log.critical(
+                    "Startup/reconcile found exchange position without OPEN journal row: contract=%s size=%s",
+                    contract,
+                    size,
+                )
+        except Exception:
+            continue
+
+    for t in open_trades:
+        try:
+            asset = str(t.get("asset"))
+            contract = _gate_contract_for_asset(asset)
+            ex_size = float(pos_size_by_contract.get(contract, 0.0) or 0.0)
+            if ex_size != 0.0:
+                continue
+
+            log.warning(
+                "Reconcile %s: journal says OPEN but exchange size=0. Resolving closure. "
+                "trade_id=%s entry_price=%s",
+                contract,
+                t.get("id") or t.get("trade_id"),
+                t.get("entry_price"),
+            )
+            exit_reason = "EXCHANGE_CLOSE"
+            exit_order_id: Optional[str] = None
+
+            try:
+                last_oid = journal.get_state_value(f"last_close_order_id_{contract}")
+            except Exception:
+                last_oid = None
+            if last_oid:
+                exit_order_id = str(last_oid)
+                exit_reason = "SIGNAL_CLOSE" if close_on_signal_change else "MANUAL_CLOSE"
+
+            for key, reason in (("tp_order_id", "TAKE_PROFIT"), ("sl_order_id", "STOP_LOSS")):
+                oid = t.get(key)
+                if not oid:
+                    log.debug("Reconcile %s: no %s stored in journal row", contract, key)
+                    continue
+                try:
+                    o = executor.get_trigger_order(str(oid))
+                    status = str(o.get("status", "")).lower()
+                    finish_as = str(o.get("finish_as", "") or "").lower()
+                    fired_order_id = str(
+                        o.get("order_id") or o.get("futures_order_id") or ""
+                    ) or None
+                    log.info(
+                        "Reconcile %s: trigger order %s=%s status=%s finish_as=%s fired_order_id=%s",
+                        contract, key, oid, status, finish_as, fired_order_id,
+                    )
+                    if status in {"finished", "triggered", "closed", "done"}:
+                        exit_reason = reason
+                        exit_order_id = fired_order_id
+                        log.warning(
+                            "Reconcile %s: %s triggered -> exit_reason=%s exit_order_id=%s",
+                            contract, key.upper(), exit_reason, exit_order_id,
+                        )
+                        break
+                except Exception:
+                    log.exception("Reconcile %s: failed to fetch trigger order %s=%s", contract, key, oid)
+                    continue
+
+            entry_px = float(t.get("entry_price") or 0.0)
+            qty = float(t.get("qty") or 0.0)
+            side = str(t.get("side") or "LONG")
+            center_ts = _utc_now()
+
+            qm = _get_quanto_multiplier(executor, contract=contract)
+            if qty > 0 and qm != 1.0 and qty < qm * 2:
+                qty = float(qty * qm)
+
+            exit_px = entry_px
+            exit_fee = 0.0
+            realized_pnl: Optional[float] = None
+            if exit_order_id:
+                vwap, fee, rpnl = _fills_summary_for_order(
+                    executor,
+                    contract=contract,
+                    order_id=str(exit_order_id),
+                    center_ts=center_ts,
+                    window_sec=3600,
+                )
+                if vwap is not None:
+                    exit_px = float(vwap)
+                if fee is not None:
+                    exit_fee = float(fee)
+                realized_pnl = rpnl
+            else:
+                log.warning(
+                    "Reconcile %s: no exit_order_id found; exit price will default to entry_price=%.6g",
+                    contract, entry_px,
+                )
+
+            closure = _mk_exit_journal_record(
+                ts=center_ts,
+                asset=asset,
+                side=side,
+                qty=qty,
+                entry_price=entry_px,
+                exit_price=exit_px,
+                exit_reason=exit_reason,
+                fee_rate=float(cfg["execution"]["fee_rate"]),
+                exit_order_id=exit_order_id,
+            )
+
+            try:
+                entry_fee = float(t.get("entry_fee") or 0.0)
+            except Exception:
+                entry_fee = 0.0
+
+            if exit_fee or entry_fee:
+                closure["fees"] = float(entry_fee + float(exit_fee or 0.0))
+                try:
+                    closure["pnl"] = float(closure.get("gross_pnl", 0.0)) - float(closure.get("fees", 0.0))
+                except Exception:
+                    pass
+
+            if realized_pnl is not None:
+                closure["pnl"] = float(realized_pnl)
+                try:
+                    closure["gross_pnl"] = float(realized_pnl) + float(closure.get("fees", 0.0))
+                except Exception:
+                    pass
+
+            closure["trade_id"] = int(t.get("trade_id"))
+
+            journal.log_trade_exit(closure)
+            journal.update_equity(ts=center_ts, equity=equity)
+
+            log.warning(
+                "Reconcile %s: JOURNAL CLOSED trade_id=%s exit_reason=%s exit_price=%.6g pnl=%s exit_order_id=%s",
+                contract,
+                closure.get("trade_id"),
+                exit_reason,
+                exit_px,
+                closure.get("pnl"),
+                exit_order_id,
+            )
+
+            if last_oid:
+                try:
+                    journal.set_state_value(f"last_close_order_id_{contract}", "", _utc_now())
+                except Exception:
+                    pass
+        except Exception:
+            log.exception("Reconciliation failed for open trade: %s", t)
 
 
 def run_live(config_path: Path) -> None:
@@ -763,6 +1086,27 @@ def run_live(config_path: Path) -> None:
                 peak_equity = startup_equity
         journal.set_state_value("peak_equity", str(peak_equity), pd.Timestamp.utcnow())
 
+        try:
+            startup_positions = executor.get_open_positions()
+            time.sleep(0.2)
+            _reconcile_journal_with_exchange(
+                journal=journal,
+                executor=executor,
+                positions=startup_positions,
+                equity=float(startup_equity),
+                cfg=cfg,
+                close_on_signal_change=close_on_signal_change,
+                log=log,
+            )
+            _repair_recent_closures_from_gate(
+                journal=journal,
+                executor=executor,
+                cfg=cfg,
+                log=log,
+            )
+        except Exception:
+            log.exception("Startup reconciliation failed")
+
     last_processed: Dict[str, pd.Timestamp] = {}
 
     log.info("Starting live runner. Assets=%s timeframe=%s poll=60s", assets, timeframe)
@@ -841,6 +1185,25 @@ def run_live(config_path: Path) -> None:
                     peak_equity,
                 )
                 break
+
+            # Reconciliation must run on every poll, not only when a candle closes.
+            positions = executor.get_open_positions()
+            time.sleep(0.2)
+            _reconcile_journal_with_exchange(
+                journal=journal,
+                executor=executor,
+                positions=positions,
+                equity=equity,
+                cfg=cfg,
+                close_on_signal_change=close_on_signal_change,
+                log=log,
+            )
+            _repair_recent_closures_from_gate(
+                journal=journal,
+                executor=executor,
+                cfg=cfg,
+                log=log,
+            )
 
             # Candle detection per asset.
             new_candle_assets: List[str] = []
@@ -1190,7 +1553,7 @@ def run_live(config_path: Path) -> None:
                     tp_px_f = float(tp_px) if tp_px is not None else None
                     sl_px_f = float(sl_px) if sl_px is not None else None
 
-                    _ensure_tpsl_for_position(
+                    replaced_orders = _ensure_tpsl_for_position(
                         executor=executor,
                         contract=c,
                         side=pos_side,
@@ -1200,6 +1563,13 @@ def run_live(config_path: Path) -> None:
                         trigger_rule=int(trigger_rule),
                         log=log,
                     )
+                    trade_id = jt.get("trade_id")
+                    if trade_id and (replaced_orders.get("tp_order_id") or replaced_orders.get("sl_order_id")):
+                        journal.update_trade_order_ids(
+                            int(trade_id),
+                            tp_order_id=replaced_orders.get("tp_order_id"),
+                            sl_order_id=replaced_orders.get("sl_order_id"),
+                        )
             except Exception:
                 log.exception("TP/SL resync failed")
 
@@ -1211,12 +1581,44 @@ def run_live(config_path: Path) -> None:
                 if float(p.get("size", 0) or 0) != 0 and str(p.get("contract"))
             }
 
+            # ── Agent pause-entries flag check ────────────────────────────────
+            _agent_flags_path = os.path.join(os.path.dirname(__file__), "agent", ".runner_flags.yaml")
+            _agent_pause = False
+            try:
+                if os.path.exists(_agent_flags_path):
+                    with open(_agent_flags_path, "r", encoding="utf-8") as _fh:
+                        _flags = yaml.safe_load(_fh) or {}
+                    _agent_pause = bool(_flags.get("pause_entries", False))
+                    _pause_until = _flags.get("pause_entries_until")
+                    if _agent_pause and _pause_until:
+                        import pandas as _pd
+                        _until_ts = _pd.Timestamp(_pause_until)
+                        if _pd.Timestamp.utcnow().tz_localize("UTC") >= _until_ts:
+                            # Pause sudah expired — clear flag otomatis
+                            _flags["pause_entries"] = False
+                            _flags["pause_entries_until"] = None
+                            with open(_agent_flags_path, "w", encoding="utf-8") as _fh2:
+                                yaml.dump(_flags, _fh2, allow_unicode=True)
+                            _agent_pause = False
+                            log.info("Agent pause_entries expired, auto-cleared")
+            except Exception:
+                log.warning("Failed to read agent runner flags; proceeding normally")
+                _agent_pause = False
+
+            if _agent_pause:
+                log.warning("Agent flag: pause_entries=True — skipping all new entries this tick")
+
             # Entry logic: if no position and have a signal -> size + leverage + order.
             for asset in new_candle_assets:
                 contract = _gate_contract_for_asset(asset)
                 pos_dir = _position_direction_for_contract(positions, contract)
                 sig = sig_by_asset.get(asset)
                 if sig is None or pos_dir != 0:
+                    continue
+
+                # Agent pause check
+                if _agent_pause:
+                    log.info("Skipping entry (agent pause): asset=%s", asset)
                     continue
 
                 # Gate futures `size` must be a non-zero integer (contracts).

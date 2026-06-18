@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import sqlite3
 
@@ -70,33 +70,112 @@ class Journal:
                 row = cur.fetchone()
                 trade_id = int(row["trade_id"]) if row is not None else None
 
-            conn.execute(
-                """
-                INSERT INTO trade_closures (
-                    trade_id, timestamp, asset, side, qty, exit_order_id,
-                    entry_price, exit_price, exit_reason,
-                    gross_pnl, fees, pnl
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    trade_id,
-                    pd.Timestamp(closure["timestamp"]).isoformat(),
-                    closure["asset"],
-                    closure["side"],
-                    float(closure["qty"]),
-                    closure.get("exit_order_id"),
-                    float(closure["entry_price"]),
-                    float(closure["exit_price"]),
-                    closure["exit_reason"],
-                    float(closure["gross_pnl"]),
-                    float(closure["fees"]),
-                    float(closure["pnl"]),
-                ),
+            existing = None
+            if trade_id is not None:
+                existing = conn.execute(
+                    "SELECT closure_id FROM trade_closures WHERE trade_id = ? LIMIT 1",
+                    (trade_id,),
+                ).fetchone()
+
+            exit_order_id = closure.get("exit_order_id")
+            if existing is None and exit_order_id:
+                existing = conn.execute(
+                    "SELECT closure_id FROM trade_closures WHERE exit_order_id = ? LIMIT 1",
+                    (str(exit_order_id),),
+                ).fetchone()
+
+            values = (
+                trade_id,
+                pd.Timestamp(closure["timestamp"]).isoformat(),
+                closure["asset"],
+                closure["side"],
+                float(closure["qty"]),
+                str(exit_order_id) if exit_order_id else None,
+                float(closure["entry_price"]),
+                float(closure["exit_price"]),
+                closure["exit_reason"],
+                float(closure["gross_pnl"]),
+                float(closure["fees"]),
+                float(closure["pnl"]),
             )
+
+            if existing is not None:
+                conn.execute(
+                    """
+                    UPDATE trade_closures
+                    SET trade_id = ?, timestamp = ?, asset = ?, side = ?, qty = ?,
+                        exit_order_id = ?, entry_price = ?, exit_price = ?,
+                        exit_reason = ?, gross_pnl = ?, fees = ?, pnl = ?
+                    WHERE closure_id = ?
+                    """,
+                    (*values, int(existing["closure_id"])),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO trade_closures (
+                        trade_id, timestamp, asset, side, qty, exit_order_id,
+                        entry_price, exit_price, exit_reason,
+                        gross_pnl, fees, pnl
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    values,
+                )
 
             if trade_id is not None:
                 conn.execute("UPDATE trades SET status='CLOSED' WHERE trade_id=?", (trade_id,))
 
+            conn.commit()
+
+    def get_recent_closures_for_repair(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Return recent closures with order linkage for exchange-fill repair."""
+        with self.db.connect() as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT
+                    c.closure_id, c.trade_id, c.timestamp, c.asset, c.side,
+                    c.qty, c.exit_order_id, c.entry_price, c.exit_price,
+                    c.exit_reason, c.gross_pnl, c.fees, c.pnl,
+                    t.timestamp AS entry_ts, t.entry_order_id, t.entry_fee
+                FROM trade_closures c
+                LEFT JOIN trades t ON t.trade_id = c.trade_id
+                WHERE c.exit_order_id IS NOT NULL AND TRIM(c.exit_order_id) != ''
+                ORDER BY c.closure_id DESC
+                LIMIT ?
+                """,
+                (int(limit),),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def update_trade_entry_fill(
+        self,
+        trade_id: int,
+        *,
+        qty: Optional[float] = None,
+        entry_price: Optional[float] = None,
+        entry_fee: Optional[float] = None,
+    ) -> None:
+        sets = []
+        params: list[Any] = []
+        if qty is not None:
+            sets.append("qty = ?")
+            params.append(float(qty))
+        if entry_price is not None:
+            sets.append("entry_price = ?")
+            params.append(float(entry_price))
+        if entry_fee is not None:
+            sets.append("entry_fee = ?")
+            params.append(float(entry_fee))
+        if not sets:
+            return
+
+        params.append(int(trade_id))
+        with self.db.connect() as conn:
+            conn.execute(
+                f"UPDATE trades SET {', '.join(sets)} WHERE trade_id = ?",
+                tuple(params),
+            )
             conn.commit()
 
     def get_open_trades(self) -> list[Dict[str, Any]]:
@@ -115,6 +194,33 @@ class Journal:
                 """
             ).fetchall()
             return [dict(r) for r in rows]
+
+    def update_trade_order_ids(
+        self,
+        trade_id: int,
+        *,
+        tp_order_id: Optional[str] = None,
+        sl_order_id: Optional[str] = None,
+    ) -> None:
+        """Persist replacement TP/SL trigger ids after exchange resync."""
+        sets = []
+        params: list[Any] = []
+        if tp_order_id:
+            sets.append("tp_order_id = ?")
+            params.append(str(tp_order_id))
+        if sl_order_id:
+            sets.append("sl_order_id = ?")
+            params.append(str(sl_order_id))
+        if not sets:
+            return
+
+        params.append(int(trade_id))
+        with self.db.connect() as conn:
+            conn.execute(
+                f"UPDATE trades SET {', '.join(sets)} WHERE trade_id = ? AND status = 'OPEN'",
+                tuple(params),
+            )
+            conn.commit()
 
     def update_equity(self, ts: pd.Timestamp, equity: float) -> None:
         with self.db.connect() as conn:

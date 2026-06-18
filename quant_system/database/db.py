@@ -51,6 +51,26 @@ class Database:
         if not self._has_column(conn, "trades", "entry_fee"):
             conn.execute("ALTER TABLE trades ADD COLUMN entry_fee REAL")
 
+        try:
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_closures_trade_id_unique
+                ON trade_closures(trade_id)
+                WHERE trade_id IS NOT NULL
+                """
+            )
+            conn.execute(
+                """
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_trade_closures_exit_order_id_unique
+                ON trade_closures(exit_order_id)
+                WHERE exit_order_id IS NOT NULL AND TRIM(exit_order_id) != ''
+                """
+            )
+        except sqlite3.IntegrityError:
+            # Older DBs may already contain duplicate closure rows. Runtime upsert
+            # still keeps new writes idempotent; cleanup can be done separately.
+            pass
+
     def initialize(self) -> None:
         schema = self.schema_path.read_text(encoding="utf-8")
         with self.connect() as conn:

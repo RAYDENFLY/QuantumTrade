@@ -187,6 +187,8 @@ class GateExecutor:
 
         # For a LONG position, TP/SL are SELL orders; for SHORT, TP/SL are BUY orders.
         close_side = "sell" if side == "LONG" else "buy"
+        tp_rule = 1 if side == "LONG" else 2
+        sl_rule = 2 if side == "LONG" else 1
 
         if take_profit is not None:
             results["tp"] = self._place_trigger_order(
@@ -197,7 +199,7 @@ class GateExecutor:
                 order_price=0.0,
                 reduce_only=True,
                 text="t-qt-tp",
-                trigger_rule=int(trigger_rule),
+                trigger_rule=int(tp_rule),
             )
 
         if stop_loss is not None:
@@ -209,7 +211,7 @@ class GateExecutor:
                 order_price=0.0,
                 reduce_only=True,
                 text="t-qt-sl",
-                trigger_rule=int(trigger_rule),
+                trigger_rule=int(sl_rule),
             )
 
         return results
@@ -288,15 +290,22 @@ class GateExecutor:
         else:
             raise ValueError("side must be 'buy' or 'sell'")
 
-        payload: Dict[str, Any] = {
+        initial: Dict[str, Any] = {
+            "contract": str(contract),
+            "size": abs(signed_size),
+            # price=0 means market order when triggered
+            "price": "0"
+            if float(order_price) == 0.0
+            else self._format_price(contract, float(order_price)),
+            "tif": "ioc",
+            "text": str(text),
+        }
+
+        signed_reduce_only_payload: Dict[str, Any] = {
             "initial": {
-                "contract": str(contract),
-                "size": abs(signed_size),
-                # price=0 means market order when triggered
-                "price": "0"
-                if float(order_price) == 0.0
-                else self._format_price(contract, float(order_price)),
-                "tif": "ioc",
+                **initial,
+                "size": int(signed_size),
+                "reduce_only": bool(reduce_only),
             },
             "trigger": {
                 "strategy_type": 0,
@@ -305,9 +314,33 @@ class GateExecutor:
                 "rule": int(trigger_rule),
                 "expiration": 86400,
             },
-            "order_type": order_type,
         }
-        return self._request_json("POST", path, params=None, payload=payload)
+
+        try:
+            return self._request_json("POST", path, params=None, payload=signed_reduce_only_payload)
+        except GateHTTPError as e:
+            msg = str(e)
+            fallback_labels = (
+                "AUTO_INVALID_PARAM_ORDER_TYPE",
+                "INVALID_PARAM",
+                "INVALID_ARGUMENT",
+            )
+            if not any(label in msg for label in fallback_labels):
+                raise
+
+            # Some Gate environments only accept the documented close-order
+            # schema. Use it only as a fallback because testnet rejects it.
+            close_order_payload: Dict[str, Any] = {
+                "initial": initial,
+                "trigger": signed_reduce_only_payload["trigger"],
+                "order_type": order_type,
+            }
+            self.log.warning(
+                "Gate rejected signed reduce_only trigger; retrying order_type=%s for %s",
+                order_type,
+                contract,
+            )
+            return self._request_json("POST", path, params=None, payload=close_order_payload)
 
     def get_open_positions(self) -> List[Dict[str, Any]]:
         path = "/futures/usdt/positions"
