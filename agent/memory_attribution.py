@@ -74,20 +74,21 @@ class MemoryAttributionEngine:
     ) -> Optional[Dict[str, Any]]:
         """
         Attribute outcome to memory for a resolved episode.
-        Finds the most recent attribution record for this episode.
+        Updates the existing pending attribution record in-place.
+        No duplicate rows created.
         """
+        # Find the pending attribution record for this episode
         attributions = self._storage.get_recent_attributions(limit=100)
         target = None
         for a in attributions:
-            if int(a.get("episode_id", 0)) == episode_id:
+            if int(a.get("episode_id", 0)) == episode_id and a.get("outcome_quality") == "pending":
                 target = a
                 break
 
         if not target:
-            log.warning("MemoryAttributionEngine: no attribution record found for episode %d", episode_id)
+            log.warning("MemoryAttributionEngine: no pending attribution found for episode %d", episode_id)
             return None
 
-        attribution_id = target["id"]
         memory_rules_count = int(target.get("memory_rules_count", 0))
         memory_confidence = float(target.get("memory_confidence", 0.0))
 
@@ -100,19 +101,9 @@ class MemoryAttributionEngine:
             equity_delta_pct=equity_delta_pct,
         )
 
-        # Store updated attribution
-        # Note: storage.save_attribution doesn't support UPDATE, so we create a new record
-        # with resolved outcome. The original pending record remains as-is.
-        new_id = self._storage.save_attribution(
-            ts=target.get("ts", datetime.now(tz=timezone.utc)),
-            plan_id=int(target.get("plan_id", 0)),
+        # UPDATE existing pending record (no duplicate created)
+        self._storage.update_attribution(
             episode_id=episode_id,
-            memory_rules_count=memory_rules_count,
-            memory_confidence=memory_confidence,
-            planner_decision=str(target.get("planner_decision", "unknown")),
-            analyst_consensus=str(target.get("analyst_consensus", "unknown")),
-            debate_verdict=str(target.get("debate_verdict", "unknown")),
-            survival_mode=str(target.get("survival_mode", "NORMAL")),
             outcome_quality=outcome_quality,
             survival_score_delta=round(survival_score_delta, 4),
             equity_delta_pct=round(equity_delta_pct, 4),
@@ -125,7 +116,7 @@ class MemoryAttributionEngine:
         )
 
         return {
-            "attribution_id": new_id,
+            "episode_id": episode_id,
             "memory_contribution_score": round(contribution, 4),
             "outcome_quality": outcome_quality,
         }

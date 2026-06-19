@@ -111,6 +111,8 @@ class AgentStorage(ABC):
     @abstractmethod
     def save_attribution(self, ts: datetime, plan_id: int, episode_id: int, memory_rules_count: int, memory_confidence: float, planner_decision: str, analyst_consensus: str, debate_verdict: str, survival_mode: str, outcome_quality: str, survival_score_delta: float, equity_delta_pct: float, memory_contribution_score: float) -> int: ...
     @abstractmethod
+    def update_attribution(self, episode_id: int, outcome_quality: str, survival_score_delta: float, equity_delta_pct: float, memory_contribution_score: float) -> None: ...
+    @abstractmethod
     def get_recent_attributions(self, limit: int = 20) -> List[Dict[str, Any]]: ...
     @abstractmethod
     def get_attribution_metrics(self) -> Dict[str, Any]: ...
@@ -188,6 +190,7 @@ CREATE TABLE IF NOT EXISTS memory_attributions (
     created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_memory_attributions_ts ON memory_attributions(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_attributions_pending ON memory_attributions(episode_id) WHERE outcome_quality='pending';
 """
 # ===================== PostgreSQL =====================
 class PostgresAgentStorage(AgentStorage):
@@ -469,6 +472,13 @@ class PostgresAgentStorage(AgentStorage):
             return [dict(zip(cols, r)) for r in rows]
         except Exception:
             log.exception("get_recent_attributions failed"); return []
+    def update_attribution(self, episode_id, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> None:
+        with self._get_conn().cursor() as cur:
+            cur.execute(
+                "UPDATE memory_attributions SET outcome_quality=%s, survival_score_delta=%s, equity_delta_pct=%s, memory_contribution_score=%s WHERE episode_id=%s AND outcome_quality='pending'",
+                (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id),
+            )
+
     def get_attribution_metrics(self) -> Dict[str, Any]:
         try:
             with self._get_conn().cursor() as cur:
@@ -761,6 +771,13 @@ class SQLiteAgentStorage(AgentStorage):
                 return [dict(r) for r in con.execute("SELECT * FROM memory_attributions ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()]
         except Exception:
             log.exception("get_recent_attributions failed"); return []
+    def update_attribution(self, episode_id, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> None:
+        with self._con() as con:
+            con.execute(
+                "UPDATE memory_attributions SET outcome_quality=?, survival_score_delta=?, equity_delta_pct=?, memory_contribution_score=? WHERE episode_id=? AND outcome_quality='pending'",
+                (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id),
+            )
+
     def get_attribution_metrics(self) -> Dict[str, Any]:
         try:
             with self._con() as con:
