@@ -16,6 +16,7 @@ Jalankan: python -m agent.agent
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -354,6 +355,7 @@ class AutonomousAgent:
         # 7. Merge dan execute plans
         # Rule-based plan dieksekusi dulu (priority), lalu LLM plan
         plan_id: Optional[int] = None
+        _episode_ids_for_plan: set = set()  # collected during action loop for debate backfill
         for plan in filter(None, [rule_plan, llm_plan]):
             filtered_plan, rejections = filter_plan(plan, snapshot, self._mode, self._policy_cfg)
 
@@ -427,12 +429,16 @@ class AutonomousAgent:
                         treasury_usdt     = self._treasury.treasury,
                         survival_score    = 0.0,  # will be filled from experiment tracking on next tick
                         analyst_consensus = summary.get("consensus", "unknown"),
-                        debate_verdict    = "unknown",  # debate runs after actions; updated on next tick
+                        debate_verdict    = "unknown",  # placeholder — updated after Bull/Bear debate
                         snapshot_json     = _json_ep.dumps(snap_dict),
                         outcome_json      = _json_ep.dumps({"success": success, "result": result, "guardrail_blocked": not allowed}),
                         importance_score  = 0.5,
                     )
                     log.debug("Episode recorded: id=%d action=%s", episode_id, action.type.value)
+
+                    # Collect episode IDs for debate verdict backfill
+                    if isinstance(episode_id, int):
+                        _episode_ids_for_plan.add(episode_id)
 
                     # ── Phase 7D.2: Record decision context for attribution ──
                     try:
@@ -507,6 +513,19 @@ class AutonomousAgent:
                 )
             except Exception:
                 log.exception("Bull/Bear research failed (non-fatal)")
+
+        # ── Phase 7.6.1: Backfill debate_verdict into episodes ──
+        if plan_id is not None and _episode_ids_for_plan:
+            try:
+                debate_verdict = verdict.get("final_verdict", "unknown") if 'verdict' in dir() and isinstance(verdict, dict) else "unknown"
+                for ep_id in _episode_ids_for_plan:
+                    self._storage.update_episode_outcome(
+                        episode_id=ep_id,
+                        outcome_json=json.dumps({"debate_verdict": debate_verdict}),
+                        resolved=False,
+                    )
+            except Exception:
+                log.exception("Debate verdict backfill failed (non-fatal)")
 
         # ── Experiment tracking (Phase 6) ──
         try:
