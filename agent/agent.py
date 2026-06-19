@@ -514,16 +514,27 @@ class AutonomousAgent:
             except Exception:
                 log.exception("Bull/Bear research failed (non-fatal)")
 
-        # ── Phase 7.6.1: Backfill debate_verdict into episodes ──
+        # ── Phase 7.6.1: Backfill debate_verdict into episodes (merge-safe) ──
         if plan_id is not None and _episode_ids_for_plan:
             try:
-                debate_verdict = verdict.get("final_verdict", "unknown") if 'verdict' in dir() and isinstance(verdict, dict) else "unknown"
+                debate_verdict_val = verdict.get("final_verdict", "unknown") if 'verdict' in dir() and isinstance(verdict, dict) else "unknown"
                 for ep_id in _episode_ids_for_plan:
-                    self._storage.update_episode_outcome(
-                        episode_id=ep_id,
-                        outcome_json=json.dumps({"debate_verdict": debate_verdict}),
-                        resolved=False,
-                    )
+                    existing_ep = self._storage.get_episode(ep_id)
+                    if existing_ep:
+                        merged = existing_ep.get("outcome_json", "{}")
+                        if isinstance(merged, str):
+                            try:
+                                merged = json.loads(merged)
+                            except Exception:
+                                merged = {}
+                        elif not isinstance(merged, dict):
+                            merged = {}
+                        merged["debate_verdict"] = debate_verdict_val
+                        self._storage.update_episode_outcome(
+                            episode_id=ep_id,
+                            outcome_json=json.dumps(merged),
+                            resolved=False,
+                        )
             except Exception:
                 log.exception("Debate verdict backfill failed (non-fatal)")
 
