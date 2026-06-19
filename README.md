@@ -6,8 +6,167 @@ Config-driven quantitative trading system with:
 - Gate.io Futures (USDT) execution adapter
 - Live runner (`live_runner.py`) that trades on newly-closed 4H candles
 - Monitoring website (FastAPI dashboard) in `dashboard/`
+- Autonomous survival agent (`agent/`) with episodic memory, pattern mining, and memory learning layer
 
 > **Safety note**: This repo can place real orders if `gate.base_url` points to production and your API keys have trading permissions. Start on testnet, size small, and consider adding/using a `dry_run` switch.
+
+## Current Project Status
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 0 | ✅ Complete | Foundation, storage, schema, snapshots |
+| Phase 1 | ✅ Complete | Observer / shadow mode |
+| Phase 2 | ✅ Complete | Experiment tracking |
+| Phase 3 | ✅ Complete | Survival economics (treasury, cost, runway) |
+| Phase 4 | ✅ Complete | Multi-analyst system (Technical, Market, Survival) |
+| Phase 5 | ✅ Complete | Bull vs Bear research & debate engine |
+| Phase 6 | ✅ Complete | Continuous survival evaluation |
+| Phase 7 | ✅ Complete | **Memory learning layer** (see below) |
+| Phase 8 | 📋 Planned | Controlled memory influence |
+
+---
+
+## Phase 7 — Memory Learning Layer (Complete)
+
+The memory learning layer enables the agent to learn from past decisions and build validated patterns from experience. All Phase 7 sub-phases are implemented and verified in production.
+
+### 7A — Episodic Memory
+
+- Every executed action is recorded as an **episode**.
+- Episodes contain: action type, survival mode, treasury state, analyst consensus, debate verdict, and snapshot context.
+- Episodes resolve after a **6-hour evaluation window**.
+- Resolution captures:
+  - `decision_quality` (positive / negative / neutral)
+  - `survival_score_delta`
+  - `equity_delta_pct`
+  - `action_success`
+  - `debate_verdict`
+
+### 7B — Episode Resolution
+
+- `EpisodeResolver` scans unresolved episodes older than 6 hours.
+- Compares stored episode metrics against current experiment state.
+- Produces deterministic decision quality classification.
+- Triggers attribution outcome recording.
+
+### 7C — Semantic Memory (Pattern Mining)
+
+- `MemoryMiner` scans resolved episodes and groups them by:
+  - action_type
+  - survival_mode
+  - analyst_consensus
+  - debate_verdict
+- Creates patterns only when:
+  - sample_size >= 5
+  - success_rate > 0.70 or < 0.30 (significant)
+- **Warm-up mining**: fires every 10 loops during the first 100 loops, then every 50 loops.
+- Idempotent — checkpoints track the last processed episode ID per pattern.
+
+### 7C.2 — Pattern Validation
+
+- `PatternValidator` validates patterns against:
+  - `sample_size >= 10`
+  - `confidence_score >= 0.60`
+  - `success_rate >= 0.70`
+  - `avg_survival_score_delta > 0`
+- Validated patterns are flagged as `validated=True` with a `validation_score`.
+- Invalid patterns are deactivated.
+
+### 7D.0 — Memory Advisor (Sandbox)
+
+- `MemoryAdvisor` provides counterfactual advice based on validated memory patterns.
+- Advice is stored independently — planner decisions are never modified.
+- Tracks agreement/disagreement between planner and memory recommendation.
+
+### 7D.1 — Procedural Memory
+
+- `ProceduralMemory` selects relevant validated patterns matching current conditions.
+- `inject_for_plan()` is integrated into the agent loop.
+- Injects pattern context into every plan cycle after Bull/Bear debate.
+- Patterns are scored by relevance (survival mode match, analyst consensus match, debate verdict match).
+- Top 5 relevant patterns are injected per plan.
+- Memory is advisory only — planner authority is unchanged.
+
+### 7D.2 — Memory Attribution Engine
+
+- `MemoryAttributionEngine` tracks whether memory contributes to successful decisions.
+- Attribution context is recorded **after** Bull/Bear research (ensures real debate verdict).
+- Attribution captures:
+  - `planner_decision`
+  - `analyst_consensus`
+  - `debate_verdict` (not hardcoded "unknown")
+  - `survival_mode`
+  - `memory_rules_count` (from validated pattern injections)
+  - `memory_confidence`
+- Single-record lifecycle — one episode = one attribution row.
+- Duplicate attribution bug fixed (now uses UPDATE instead of INSERT).
+
+### 7D.3 — Attribution Hook
+
+- Attribution is triggered by `EpisodeResolver` on episode resolution.
+- `attribute_outcome()` updates the existing pending attribution record.
+- No duplicate rows created.
+
+---
+
+## Latest Verified Results
+
+Confirmed in production via PostgreSQL audit:
+
+| Component | Status | Detail |
+|-----------|--------|--------|
+| First semantic pattern | ✅ Created | `TIGHTEN_RISK|NORMAL|conservative|unknown` ss=11 sr=1.0 |
+| Pattern validation | ✅ Passed | validation_score=0.7218 (all 4 checks passed) |
+| Procedural memory injection | ✅ Active | 10+ injection records with rules=1 |
+| Attribution context | ✅ Active | 12+ records with rules=1, conf=0.7218 |
+| Memory advice | ✅ Active | 19 advice records stored |
+| Debate verdict attribution | ✅ Verified | Real verdicts present in attribution records |
+| Memory confidence propagation | ✅ Verified | confidence > 0 flowing through pipeline |
+| Duplicate attribution lifecycle | ✅ Fixed | No duplicate episode_id in attributions |
+
+---
+
+## Current Status
+
+**Memory infrastructure is complete.** All Phase 7 components are wired end-to-end:
+
+```
+Episode → Resolution → Pattern Mining → Validation → Procedural Injection → Attribution → Advice
+```
+
+Memory influence on planner decisions is **intentionally disabled** until:
+
+- Sufficient resolved episodes accumulated (target: 50+)
+- Sufficient validated patterns across diverse action groups (target: 3+)
+- Sufficient attribution history to measure memory effectiveness (target: 10+ resolved)
+- Acceptable diversity across action groups and debate verdicts
+
+**Current mode: PASSIVE LEARNING ONLY**
+
+The system learns, validates, and records memory but does not modify planner behavior.
+
+---
+
+## Roadmap
+
+### Phase 8 — Controlled Memory Influence (Planned)
+
+**Goals:**
+
+- Enable memory-guided recommendations for planner decisions.
+- Measure planner agreement vs memory advice.
+- Track performance impact of memory-aware decisions.
+- Prevent overfitting through confidence thresholds and diversity gates.
+- Keep survival policy as the highest authority.
+
+**Constraints:**
+
+- Memory can **recommend** but cannot override hard risk controls.
+- Survival mode always wins (NORMAL > CONSERVATIVE > DEFENSIVE > HIBERNATE).
+- RiskManager remains the final authority on position sizing and exposure.
+- All memory-influenced decisions are logged for audit and rollback.
+
+---
 
 ## Apa itu QuantumTrade?
 
@@ -40,8 +199,13 @@ Komponen utama:
 	- Ambil equity/positions dan trigger orders (TP/SL)
 - `live_runner.py`
 	- Loop live (biasanya 60 detik) dan trading hanya saat **candle 4H close**
-	- Menjaga agar tidak “over-trade” pada candle yang sama
+	- Menjaga agar tidak "over-trade" pada candle yang sama
 	- Memasang TP/SL di exchange dan mencatat hasil (fee, order id)
+- `agent/`
+	- Autonomous survival agent (loop 5 menit)
+	- Policy engine, guardrails, LLM planner
+	- Multi-analyst team + Bull/Bear research
+	- Memory learning layer (Phase 7)
 - `dashboard/`
 	- `dashboard/app.py`: FastAPI (API + serving HTML)
 	- `dashboard/templates/index.html`: UI (Tailwind) + Chart.js
@@ -104,7 +268,7 @@ Dashboard menampilkan:
 - Recent trades (journal)
 - Recent closures (realized)
 
-## Konsep “realtime” di project ini
+## Konsep "realtime" di project ini
 
 Realtime di sini berarti **UI update cepat** dengan data terbaru dari exchange, bukan tick-by-tick.
 
@@ -134,7 +298,7 @@ Lihat:
 
 ## Requirements
 
-- Python 3.10+ (you’re currently on Python 3.13)
+- Python 3.10+ (you're currently on Python 3.13)
 - Pip packages used by the project (pandas, fastapi, uvicorn, lightgbm, etc.)
 
 ## Environment variables
@@ -144,7 +308,18 @@ Gate credentials are **ENV-only**:
 - `GATE_API_KEY`
 - `GATE_API_SECRET`
 
-For local dev, you can create a `.env` file in the repo root (it’s loaded by `quant_system/utils/env.py`).
+For local dev, you can create a `.env` file in the repo root (it's loaded by `quant_system/utils/env.py`).
+
+Additional environment variables used by the agent:
+
+- `AGENT_STORAGE` — Storage backend (`sqlite` / `postgres` / `auto`)
+- `AGENT_POSTGRES_DSN` — PostgreSQL connection string (required for postgres mode)
+- `AGENT_MODE` — Agent operating mode (`observe` / `shadow` / `active`)
+- `OLLAMA_BASE_URL` — Ollama LLM endpoint
+- `GROQ_API_KEY` / `DEEPSEEK_API_KEY` — Cloud LLM API keys
+- `AGENT_SERVER_COST_IDR` — Monthly server cost in IDR
+- `AGENT_INITIAL_TREASURY_USDT` — Starting treasury balance
+- `AGENT_LOOP_INTERVAL_SEC` — Agent loop interval (default 300s)
 
 ## Run the monitoring website (dashboard)
 
@@ -189,6 +364,26 @@ What it does:
 - Places market orders on Gate Futures
 - Journals trades/equity into SQLite
 
+## Run the autonomous survival agent
+
+```powershell
+cd "d:\Data Ray\QuantumTrade"
+python -m agent.agent
+```
+
+What it does:
+
+- Fetches account snapshot (positions, equity, SQLite stats)
+- Runs analyst team (Technical, Market, Survival)
+- Determines survival mode based on drawdown thresholds
+- Generates rule-based and LLM plans
+- Executes survival actions (pause entries, tighten risk, reduce positions)
+- Records episodes for memory learning
+- Runs Bull/Bear research and debate
+- Mines patterns from resolved episodes
+- Validates and injects memory patterns
+- Tracks attribution and generates advice
+
 ## Train model from Gate candles
 
 This downloads candles for configured assets, persists them to CSV cache, then trains the model.
@@ -197,8 +392,6 @@ This downloads candles for configured assets, persists them to CSV cache, then t
 cd "d:\Data Ray\QuantumTrade"
 python scripts\train_from_gate.py
 ```
-
-python -m agent.agent
 
 ## Data caching
 
@@ -210,7 +403,7 @@ These CSVs act as your growing historical dataset.
 
 ## Troubleshooting
 
-### Dashboard won’t start
+### Dashboard won't start
 
 - Make sure `fastapi` and `uvicorn` are installed in the active env.
 - If port 8000 is in use, run with another port:
@@ -219,7 +412,7 @@ These CSVs act as your growing historical dataset.
 python -m uvicorn dashboard.app:app --reload --port 8001
 ```
 
-### Live runner SQLite error: “11 values for 12 columns”
+### Live runner SQLite error: "11 values for 12 columns"
 
 Fixed by ensuring the SQL `VALUES` placeholder count matches the insert columns in `quant_system/database/journal.py`.
 
