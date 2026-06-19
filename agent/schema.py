@@ -76,7 +76,12 @@ class ProposedAction(BaseModel):
     @field_validator("type", mode="before")
     @classmethod
     def coerce_type(cls, v: Any) -> ActionType:
-        return ActionType(str(v).upper())
+        # Already an ActionType → return directly (avoids str() mangling to "ActionType.FOO")
+        if isinstance(v, ActionType):
+            return v
+        # Str → strip "ActionType." prefix if present, then convert
+        raw = str(v).upper().removeprefix("ACTIONTYPE.")
+        return ActionType(raw)
 
 
 # ---------------------------------------------------------------------------
