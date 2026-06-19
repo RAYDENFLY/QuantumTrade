@@ -41,6 +41,7 @@ from agent.memory_miner import MemoryMiner
 from agent.memory_sandbox import MemoryAdvisor
 from agent.memory_attribution import MemoryAttributionEngine
 from agent.pattern_validator import PatternValidator
+from agent.procedural_memory import ProceduralMemory
 from agent.storage import AgentStorage, make_storage
 
 log = logging.getLogger("agent")
@@ -262,6 +263,9 @@ class AutonomousAgent:
         # Phase 7D.0 — Memory Sandbox (advisory only)
         self._memory_advisor = MemoryAdvisor(storage=self._storage)
 
+        # Phase 7D.1 — Procedural Memory (advisory memory injection)
+        self._procedural_memory = ProceduralMemory(storage=self._storage)
+
         # State
         self._survival_mode   = SurvivalMode.NORMAL
         self._last_llm_ts: float = 0.0
@@ -355,7 +359,8 @@ class AutonomousAgent:
         # 7. Merge dan execute plans
         # Rule-based plan dieksekusi dulu (priority), lalu LLM plan
         plan_id: Optional[int] = None
-        _episode_ids_for_plan: set = set()  # collected during action loop for debate backfill
+        # Phase 7.6.7: Store episode_id -> action_type mapping for attribution context repair
+        _episode_actions: dict = {}  # {episode_id: action_type}
         for plan in filter(None, [rule_plan, llm_plan]):
             filtered_plan, rejections = filter_plan(plan, snapshot, self._mode, self._policy_cfg)
 
@@ -436,23 +441,9 @@ class AutonomousAgent:
                     )
                     log.debug("Episode recorded: id=%d action=%s", episode_id, action.type.value)
 
-                    # Collect episode IDs for debate verdict backfill
+                    # Phase 7.6.7: Store episode_id -> action_type mapping for attribution context repair
                     if isinstance(episode_id, int):
-                        _episode_ids_for_plan.add(episode_id)
-
-                    # ── Phase 7D.2: Record decision context for attribution ──
-                    try:
-                        self._attribution_engine.record_decision_context(
-                            plan_id=plan_id,
-                            episode_id=episode_id,
-                            memory_injections=[],
-                            planner_decision=action.type.value,
-                            analyst_consensus=summary.get("consensus", "unknown"),
-                            debate_verdict="unknown",
-                            survival_mode=self._survival_mode.value,
-                        )
-                    except Exception:
-                        log.exception("Attribution context recording failed (non-fatal)")
+                        _episode_actions[episode_id] = action.type.value
 
                 except Exception:
                     log.exception("Episode recording failed (non-fatal)")
@@ -514,11 +505,15 @@ class AutonomousAgent:
             except Exception:
                 log.exception("Bull/Bear research failed (non-fatal)")
 
-        # ── Phase 7.6.1: Backfill debate_verdict into episodes (merge-safe) ──
-        if plan_id is not None and _episode_ids_for_plan:
+        # ── Phase 7.6.7: Attribution Context Repair ──
+        # Run AFTER Bull/Bear debate so we have actual debate_verdict
+        if plan_id is not None and _episode_actions:
             try:
-                debate_verdict_val = verdict.get("final_verdict", "unknown") if 'verdict' in dir() and isinstance(verdict, dict) else "unknown"
-                for ep_id in _episode_ids_for_plan:
+                # Sade debate verdict from the debate that just ran
+                debate_verdict_val = verdict.get("final_verdict", "unknown") if 'verdict' in locals() and isinstance(verdict, dict) else "unknown"
+
+                # 1. Backfill debate_verdict into episodes (merge-safe, same as Phase 7.6.1)
+                for ep_id in list(_episode_actions.keys()):
                     existing_ep = self._storage.get_episode(ep_id)
                     if existing_ep:
                         merged = existing_ep.get("outcome_json", "{}")
@@ -535,8 +530,40 @@ class AutonomousAgent:
                             outcome_json=json.dumps(merged),
                             resolved=False,
                         )
+
+                # 2. Inject procedural memory context for this plan
+                memory_context = self._procedural_memory.inject_for_plan(
+                    plan_id=plan_id,
+                    survival_mode=self._survival_mode.value,
+                    analyst_consensus=summary.get("consensus", "unknown"),
+                    debate_verdict=debate_verdict_val,
+                    treasury_usdt=self._treasury.treasury,
+                    drawdown_pct=snapshot.account.drawdown_pct if hasattr(snapshot, 'account') else 0.0,
+                )
+                memory_injections = memory_context.get("memory_context", [])
+                log.info(
+                    "ProceduralMemory: injected %d rules for plan %d",
+                    memory_context.get("rule_count", 0), plan_id,
+                )
+
+                # 3. Record decision context with real debate_verdict and memory_injections
+                for ep_id, action_type in _episode_actions.items():
+                    self._attribution_engine.record_decision_context(
+                        plan_id=plan_id,
+                        episode_id=ep_id,
+                        memory_injections=memory_injections,
+                        planner_decision=action_type,
+                        analyst_consensus=summary.get("consensus", "unknown"),
+                        debate_verdict=debate_verdict_val,
+                        survival_mode=self._survival_mode.value,
+                    )
+                log.info(
+                    "Attribution context repaired: %d episodes with debate_verdict=%s rules=%d",
+                    len(_episode_actions), debate_verdict_val, memory_context.get("rule_count", 0),
+                )
+
             except Exception:
-                log.exception("Debate verdict backfill failed (non-fatal)")
+                log.exception("Attribution context repair failed (non-fatal)")
 
         # ── Experiment tracking (Phase 6) ──
         try:
@@ -639,15 +666,17 @@ class AutonomousAgent:
         except Exception:
             log.exception("Episode resolution failed (non-fatal)")
 
-        # ── Phase 7C: Pattern Mining & Validation (every 50 ticks ≈ 4h) ──
+        # ── Phase 7C: Pattern Mining & Validation (warm-up: every 10 ticks for first 100 loops, then every 50) ──
         try:
-            if self._loop_count % 50 == 0:
+            mining_interval = 10 if self._loop_count <= 100 else 50
+            if self._loop_count % mining_interval == 0:
                 mined = self._memory_miner.mine_patterns()
                 if mined > 0:
                     val_result = self._pattern_validator.validate_patterns()
                     log.info(
-                        "MemoryMiner: mined=%d patterns | PatternValidator: validated=%d rejected=%d",
+                        "MemoryMiner: mined=%d patterns | PatternValidator: validated=%d rejected=%d (loop=%d interval=%d)",
                         mined, val_result.get("validated", 0), val_result.get("rejected", 0),
+                        self._loop_count, mining_interval,
                     )
         except Exception:
             log.exception("Pattern mining/validation failed (non-fatal)")
