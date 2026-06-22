@@ -116,6 +116,13 @@ class AgentStorage(ABC):
     def get_recent_attributions(self, limit: int = 20) -> List[Dict[str, Any]]: ...
     @abstractmethod
     def get_attribution_metrics(self) -> Dict[str, Any]: ...
+    # Shadow Memory Influence (Phase 8.1)
+    @abstractmethod
+    def save_shadow_memory_influence(self, ts: datetime, plan_id: int, planner_action: str, planner_confidence: float, memory_action: str, memory_confidence: float, agreement: str, influence_weight: float, shadow_influence_score: float, pattern_ids_json: str, validation_scores_json: str, survival_mode: str, analyst_consensus: str, debate_verdict: str) -> int: ...
+    @abstractmethod
+    def get_recent_shadow_memory_influence(self, limit: int = 20) -> List[Dict[str, Any]]: ...
+    @abstractmethod
+    def get_shadow_memory_influence_metrics(self) -> Dict[str, Any]: ...
 
 # ===================== PG Schema =====================
 PG_SCHEMA = """
@@ -501,6 +508,44 @@ class PostgresAgentStorage(AgentStorage):
         except Exception:
             return {"total_attributions": 0, "average_contribution_score": 0.0, "memory_alignment_rate": 0.0, "memory_success_rate": 0.0, "memory_failure_rate": 0.0}
 
+    # ---- Shadow Memory Influence (Phase 8.1) ----
+    def save_shadow_memory_influence(self, ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) -> int:
+        with self._get_conn().cursor() as cur:
+            cur.execute(
+                "INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict),
+            )
+            return int(cur.fetchone()[0])
+    def get_recent_shadow_memory_influence(self, limit=20) -> List[Dict[str, Any]]:
+        try:
+            with self._get_conn().cursor() as cur:
+                cur.execute("SELECT * FROM shadow_memory_influence ORDER BY ts DESC LIMIT %s", (limit,))
+                rows = cur.fetchall(); cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            log.exception("get_recent_shadow_memory_influence failed"); return []
+    def get_shadow_memory_influence_metrics(self) -> Dict[str, Any]:
+        try:
+            with self._get_conn().cursor() as cur:
+                cur.execute("SELECT COUNT(*) as total, SUM(CASE WHEN agreement='AGREE' THEN 1 ELSE 0 END) as agrees, SUM(CASE WHEN agreement='DISAGREE' THEN 1 ELSE 0 END) as disagrees, AVG(shadow_influence_score) as avg_shadow, AVG(memory_confidence) as avg_mem_conf FROM shadow_memory_influence")
+                row = cur.fetchone()
+                total = int(row[0]) if row else 0
+                agrees = int(row[1]) if row else 0
+                disagrees = int(row[2]) if row else 0
+                avg_shadow = float(row[3]) if row and row[3] is not None else 0.0
+                avg_mem_conf = float(row[4]) if row and row[4] is not None else 0.0
+            return {
+                "total_evaluations": total,
+                "agreement_count": agrees,
+                "disagreement_count": disagrees,
+                "agreement_rate": round(agrees / max(1, total), 4),
+                "disagreement_rate": round(disagrees / max(1, total), 4),
+                "avg_shadow_influence_score": round(avg_shadow, 4),
+                "avg_memory_confidence": round(avg_mem_conf, 4),
+            }
+        except Exception:
+            return {"total_evaluations": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_shadow_influence_score": 0.0, "avg_memory_confidence": 0.0}
+
 # ===================== SQLite Schema =====================
 SQLITE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, input_snapshot TEXT, plan_json TEXT, approved_by TEXT DEFAULT 'auto', executed_at TEXT, status TEXT DEFAULT 'pending');
@@ -534,6 +579,27 @@ CREATE TABLE IF NOT EXISTS memory_injections (id INTEGER PRIMARY KEY AUTOINCREME
 CREATE INDEX IF NOT EXISTS idx_memory_injections_ts ON memory_injections(ts DESC);
 CREATE TABLE IF NOT EXISTS memory_attributions (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), episode_id INTEGER REFERENCES agent_episodes(id), memory_rules_count INTEGER NOT NULL DEFAULT 0, memory_confidence REAL NOT NULL DEFAULT 0.0, planner_decision TEXT NOT NULL, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', survival_mode TEXT NOT NULL DEFAULT 'NORMAL', outcome_quality TEXT NOT NULL DEFAULT 'unknown', survival_score_delta REAL NOT NULL DEFAULT 0.0, equity_delta_pct REAL NOT NULL DEFAULT 0.0, memory_contribution_score REAL NOT NULL DEFAULT 0.0, created_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS idx_memory_attributions_ts ON memory_attributions(ts DESC);
+CREATE TABLE IF NOT EXISTS shadow_memory_influence (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts               TEXT NOT NULL,
+    plan_id          INTEGER REFERENCES agent_plans(id),
+    planner_action   TEXT NOT NULL,
+    planner_confidence REAL NOT NULL DEFAULT 0.0,
+    memory_action    TEXT NOT NULL,
+    memory_confidence REAL NOT NULL DEFAULT 0.0,
+    agreement        TEXT NOT NULL DEFAULT 'UNKNOWN',
+    influence_weight REAL NOT NULL DEFAULT 0.0,
+    shadow_influence_score REAL NOT NULL DEFAULT 0.0,
+    pattern_ids_json TEXT NOT NULL DEFAULT '[]',
+    validation_scores_json TEXT NOT NULL DEFAULT '[]',
+    survival_mode    TEXT NOT NULL DEFAULT 'NORMAL',
+    analyst_consensus TEXT NOT NULL DEFAULT 'unknown',
+    debate_verdict   TEXT NOT NULL DEFAULT 'unknown',
+    created_at       TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_ts ON shadow_memory_influence(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_agreement ON shadow_memory_influence(agreement);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_plan ON shadow_memory_influence(plan_id);
 """
 
 class SQLiteAgentStorage(AgentStorage):
@@ -798,6 +864,41 @@ class SQLiteAgentStorage(AgentStorage):
             }
         except Exception:
             return {"total_attributions": 0, "average_contribution_score": 0.0, "memory_alignment_rate": 0.0, "memory_success_rate": 0.0, "memory_failure_rate": 0.0}
+
+    # ---- Shadow Memory Influence (Phase 8.1) ----
+    def save_shadow_memory_influence(self, ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) -> int:
+        with self._con() as con:
+            return int(con.execute(
+                "INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (ts.isoformat(), plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict),
+            ).lastrowid)
+    def get_recent_shadow_memory_influence(self, limit=20) -> List[Dict[str, Any]]:
+        try:
+            with self._con() as con:
+                con.row_factory = sqlite3.Row
+                return [dict(r) for r in con.execute("SELECT * FROM shadow_memory_influence ORDER BY ts DESC LIMIT ?", (limit,)).fetchall()]
+        except Exception:
+            log.exception("get_recent_shadow_memory_influence failed"); return []
+    def get_shadow_memory_influence_metrics(self) -> Dict[str, Any]:
+        try:
+            with self._con() as con:
+                row = con.execute("SELECT COUNT(*) as total, SUM(CASE WHEN agreement='AGREE' THEN 1 ELSE 0 END) as agrees, SUM(CASE WHEN agreement='DISAGREE' THEN 1 ELSE 0 END) as disagrees, AVG(shadow_influence_score) as avg_shadow, AVG(memory_confidence) as avg_mem_conf FROM shadow_memory_influence").fetchone()
+                total = int(row[0]) if row else 0
+                agrees = int(row[1]) if row else 0
+                disagrees = int(row[2]) if row else 0
+                avg_shadow = float(row[3]) if row and row[3] is not None else 0.0
+                avg_mem_conf = float(row[4]) if row and row[4] is not None else 0.0
+            return {
+                "total_evaluations": total,
+                "agreement_count": agrees,
+                "disagreement_count": disagrees,
+                "agreement_rate": round(agrees / max(1, total), 4),
+                "disagreement_rate": round(disagrees / max(1, total), 4),
+                "avg_shadow_influence_score": round(avg_shadow, 4),
+                "avg_memory_confidence": round(avg_mem_conf, 4),
+            }
+        except Exception:
+            return {"total_evaluations": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_shadow_influence_score": 0.0, "avg_memory_confidence": 0.0}
 
 # ===================== Factory =====================
 def make_storage() -> AgentStorage:

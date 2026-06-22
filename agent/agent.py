@@ -42,6 +42,7 @@ from agent.memory_sandbox import MemoryAdvisor
 from agent.memory_attribution import MemoryAttributionEngine
 from agent.pattern_validator import PatternValidator
 from agent.procedural_memory import ProceduralMemory
+from agent.memory_shadow import ShadowMemoryInfluence
 from agent.storage import AgentStorage, make_storage
 
 log = logging.getLogger("agent")
@@ -265,6 +266,12 @@ class AutonomousAgent:
 
         # Phase 7D.1 — Procedural Memory (advisory memory injection)
         self._procedural_memory = ProceduralMemory(storage=self._storage)
+
+        # Phase 8.1 — Shadow Memory Influence (advisory only, influence = 0.0)
+        self._shadow_memory = ShadowMemoryInfluence(
+            storage=self._storage,
+            procedural_memory=self._procedural_memory,
+        )
 
         # State
         self._survival_mode   = SurvivalMode.NORMAL
@@ -682,9 +689,9 @@ class AutonomousAgent:
             log.exception("Pattern mining/validation failed (non-fatal)")
 
         # ── Phase 7D.0: Memory Sandbox advice (per plan, advisory only) ──
+        planner_rec = "maintain"
         if plan_id is not None:
             try:
-                planner_rec = "maintain"
                 if rule_plan and rule_plan.proposed_actions:
                     planner_rec = rule_plan.proposed_actions[0].type.value
                 elif llm_plan and llm_plan.proposed_actions:
@@ -700,6 +707,29 @@ class AutonomousAgent:
                 )
             except Exception:
                 log.exception("MemoryAdvisor advice failed (non-fatal)")
+
+        # ── Phase 8.1: Shadow Memory Influence (advisory only, influence = 0.0) ──
+        if plan_id is not None:
+            try:
+                debate_verdict_val = verdict.get("final_verdict", "unknown") if 'verdict' in locals() and isinstance(verdict, dict) else "unknown"
+                # Use planner confidence from rule or LLM plan
+                planner_confidence = 0.5
+                if rule_plan and rule_plan.proposed_actions:
+                    planner_confidence = rule_plan.confidence if hasattr(rule_plan, 'confidence') else 0.5
+                elif llm_plan and llm_plan.proposed_actions:
+                    planner_confidence = llm_plan.confidence if hasattr(llm_plan, 'confidence') else 0.5
+                self._shadow_memory.evaluate(
+                    plan_id=plan_id,
+                    planner_action=planner_rec,
+                    planner_confidence=planner_confidence,
+                    survival_mode=self._survival_mode.value,
+                    analyst_consensus=summary.get("consensus", "unknown"),
+                    debate_verdict=debate_verdict_val,
+                    treasury_usdt=self._treasury.treasury,
+                    drawdown_pct=snapshot.account.drawdown_pct if hasattr(snapshot, 'account') else 0.0,
+                )
+            except Exception:
+                log.exception("ShadowMemoryInfluence evaluation failed (non-fatal)")
 
         log.info(
             "Agent tick #%d done. mode=%s treasury=$%.2f runway=%.1fd",
