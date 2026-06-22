@@ -1,11 +1,10 @@
 """
-agent/memory_shadow.py — Phase 8.1: Shadow Memory Influence Layer.
+agent/memory_shadow.py — Phase 8.3: Controlled Memory Influence Layer.
 
-Evaluates how memory WOULD influence planner decisions without allowing
-memory to modify live trading behavior.
-
-Memory remains observational. Influence weight = 0.0.
-No planner, execution, risk, or trading changes.
+Memory may influence planner decisions when confidence threshold met.
+Influence weight = 0.15 — gentle influence, planner remains primary authority.
+Safety filter: memory_confidence > planner_confidence * 1.05.
+No direct trade execution, no leverage modification, no treasury changes.
 """
 from __future__ import annotations
 
@@ -37,10 +36,15 @@ MEMORY_RECOMMENDATION_WEIGHTS = {
 
 class ShadowMemoryInfluence:
     """
-    Shadow influence layer that generates memory recommendations
-    independently from the planner and records agreement metrics.
-
-    Influence weight = 0.0 — never modifies planner decisions.
+    Phase 8.3: Controlled memory influence layer.
+    
+    Memory may influence planner decisions when:
+    - disagreement exists (memory_action != planner_action)
+    - memory_confidence > planner_confidence * CONFIDENCE_THRESHOLD
+    - influence_weight = 0.15 (gentle influence)
+    
+    Planner remains primary authority.
+    No direct trade execution, no leverage/treasury/position changes.
     """
 
     def __init__(
@@ -50,6 +54,10 @@ class ShadowMemoryInfluence:
     ) -> None:
         self._storage = storage
         self._procedural_memory = procedural_memory
+
+    # Configuration constants
+    INFLUENCE_WEIGHT = 0.15        # Gentle influence: 15% weight toward memory
+    CONFIDENCE_THRESHOLD = 1.05    # Memory must be 5% more confident than planner
 
     def evaluate(
         self,
@@ -63,16 +71,13 @@ class ShadowMemoryInfluence:
         drawdown_pct: float,
     ) -> Dict[str, Any]:
         """
-        Generate a shadow memory recommendation and compare with planner.
+        Generate shadow memory recommendation and optionally influence planner.
 
-        Steps:
-          1. Get relevant validated patterns for current context.
-          2. Determine memory-recommended action.
-          3. Compare planner vs memory action.
-          4. Record agreement/shadow influence metrics.
-          5. Store to DB.
+        Phase 8.3: Memory may influence planner when:
+        - memory_action != planner_action (disagreement)
+        - memory_confidence > planner_confidence * CONFIDENCE_THRESHOLD
 
-        Returns shadow evaluation dict. Planner is never modified.
+        Planner remains primary authority. No trade/leverage/treasury changes.
         """
         # 1. Get validated patterns matching current conditions
         relevant_patterns = self._procedural_memory.get_relevant_rules(
@@ -98,16 +103,32 @@ class ShadowMemoryInfluence:
         else:
             agreement_status = "DISAGREE"
 
-        # 4. Compute shadow influence score
-        # Influence weight is always 0.0 — this is a shadow measurement
-        influence_weight = 0.0
+        # 4. Compute influence score and determine if override applies
+        influence_weight = self.INFLUENCE_WEIGHT
+        override_applied = False
+
         if agreement:
+            # Planner and memory agree — no conflict
             shadow_influence_score = min(1.0, planner_confidence * memory_confidence)
         else:
-            # How much influence WOULD memory have had?
-            shadow_influence_score = memory_confidence * (1.0 - planner_confidence)
+            # Check safety confidence filter: memory must be sufficiently confident
+            if memory_confidence > planner_confidence * self.CONFIDENCE_THRESHOLD:
+                # Safe to apply influence — memory is confidently different
+                override_applied = True
+                shadow_influence_score = min(1.0, memory_confidence * influence_weight)
+                log.warning(
+                    "MEMORY OVERRIDE: plan=%d planner=%s(%.2f) -> memory=%s(%.2f) "
+                    "weight=%.2f conf_threshold=%.2f",
+                    plan_id, planner_action, planner_confidence,
+                    memory_action, memory_confidence,
+                    influence_weight, self.CONFIDENCE_THRESHOLD,
+                )
+            else:
+                # Disagreement exists but memory not confident enough
+                override_applied = False
+                shadow_influence_score = memory_confidence * (1.0 - planner_confidence)
 
-        # 5. Store shadow evaluation
+        # 5. Store shadow evaluation with override status
         try:
             self._storage.save_shadow_memory_influence(
                 ts=datetime.now(tz=timezone.utc),
@@ -117,7 +138,7 @@ class ShadowMemoryInfluence:
                 memory_action=memory_action,
                 memory_confidence=round(memory_confidence, 4),
                 agreement=agreement_status,
-                influence_weight=influence_weight,
+                influence_weight=influence_weight if override_applied else 0.0,
                 shadow_influence_score=round(shadow_influence_score, 4),
                 pattern_ids_json=json.dumps(pattern_ids),
                 validation_scores_json=json.dumps(validation_scores),
@@ -125,10 +146,13 @@ class ShadowMemoryInfluence:
                 analyst_consensus=analyst_consensus,
                 debate_verdict=debate_verdict,
             )
+            # Structured log with all influence fields
             log.info(
-                "ShadowMemoryInfluence: plan=%d planner=%s memory=%s agreement=%s "
-                "shadow_score=%.4f patterns=%d",
-                plan_id, planner_action, memory_action, agreement_status,
+                "ShadowMemoryInfluence: plan=%d planner=%s(%.4f) memory=%s(%.4f) "
+                "agreement=%s weight=%.2f override=%s shadow_score=%.4f patterns=%d",
+                plan_id, planner_action, planner_confidence,
+                memory_action, memory_confidence,
+                agreement_status, influence_weight, override_applied,
                 shadow_influence_score, len(pattern_ids),
             )
         except Exception:
@@ -141,11 +165,12 @@ class ShadowMemoryInfluence:
             "memory_action": memory_action,
             "memory_confidence": memory_confidence,
             "agreement": agreement_status,
-            "influence_weight": influence_weight,
+            "influence_weight": influence_weight if override_applied else 0.0,
             "shadow_influence_score": round(shadow_influence_score, 4),
             "pattern_ids": pattern_ids,
             "validation_scores": validation_scores,
             "pattern_count": len(relevant_patterns),
+            "override_applied": override_applied,
         }
 
     def _determine_memory_recommendation(
