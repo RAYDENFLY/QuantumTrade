@@ -284,6 +284,93 @@
         </div>
       </section>
 
+      <!-- ================================================================ -->
+      <!-- Performance Over Time -->
+      <!-- ================================================================ -->
+      <section class="space-y-4 fade-in" style="animation-delay:1.0s" id="perf_section">
+        <div class="flex items-center gap-3">
+          <h2 class="text-lg font-semibold text-slate-200">
+            <i class="fa-solid fa-chart-line mr-2 text-fuchsia-400"></i>
+            Performance Over Time
+          </h2>
+        </div>
+
+        <!-- Row A: Learning Curve + Intelligence Score -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <!-- Learning Curve -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-graduation-cap mr-2 text-emerald-400"></i>Learning Curve <span id="lc_trend" class="text-xs ml-2 text-slate-500"></span></h3>
+            <div id="lc_chart" class="space-y-1 text-sm">
+              <div class="text-xs text-slate-600 text-center py-4">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Intelligence Score Timeline -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-brain mr-2 text-violet-400"></i>Intelligence Score Timeline</h3>
+            <div id="is_score_card" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-center">
+                <div class="text-xs text-slate-400">Today</div>
+                <div id="is_today" class="text-xl font-mono font-bold text-emerald-400">—</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-center">
+                <div class="text-xs text-slate-400">Yesterday</div>
+                <div id="is_yesterday" class="text-xl font-mono text-slate-300">—</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-center">
+                <div class="text-xs text-slate-400">Delta</div>
+                <div id="is_delta" class="text-xl font-mono font-bold">—</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-center">
+                <div class="text-xs text-slate-400">7d Trend</div>
+                <div id="is_7d_sparkline" class="text-xs font-mono text-slate-300">—</div>
+              </div>
+            </div>
+            <div id="is_chart" class="space-y-1 text-sm">
+              <div class="text-xs text-slate-600 text-center py-2">Loading…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row B: Pattern Birth Timeline + Memory Effectiveness -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <!-- Pattern Birth Timeline -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-feather mr-2 text-amber-400"></i>Pattern Birth Timeline</h3>
+            <div id="pb_timeline" class="space-y-1 text-xs max-h-[24rem] overflow-y-auto pr-1">
+              <div class="text-xs text-slate-600 text-center py-4">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Memory Effectiveness Trend -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-shield-halved mr-2 text-cyan-400"></i>Memory Effectiveness Trend</h3>
+            <div id="me_chart" class="space-y-1 text-sm">
+              <div class="text-xs text-slate-600 text-center py-4">Loading…</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Row C: Improvement Detector + Evolution Forecast -->
+        <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+          <!-- Improvement Detector -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-gauge-high mr-2 text-emerald-400"></i>Improvement Detector</h3>
+            <div id="id_panel" class="space-y-3 text-sm">
+              <div class="text-xs text-slate-600 text-center py-4">Loading…</div>
+            </div>
+          </div>
+
+          <!-- Evolution Forecast -->
+          <div class="rounded-xl bg-slate-900/60 border border-slate-800 p-4">
+            <h3 class="text-sm font-semibold mb-3 text-slate-300"><i class="fa-solid fa-crystal-ball mr-2 text-indigo-400"></i>Evolution Forecast (7d)</h3>
+            <div id="ef_panel" class="space-y-3 text-sm">
+              <div class="text-xs text-slate-600 text-center py-4">Loading…</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       <footer class="text-xs text-slate-500 py-2 text-center">
         All data from agent SQLite/PostgreSQL storage (read-only). Data refreshes every 10 seconds.
       </footer>
@@ -694,14 +781,23 @@
 
       // ---- AI Evolution ----
       async function loadEvolution() {
+        let d = null;
         try {
           const r = await fetch("/api/agent/evolution");
-          const d = await r.json();
+          d = await r.json();
           if (d.error) throw new Error(d.error);
+        } catch(e) {
+          console.error("Evolution fetch failed:", e);
+          panicEvPanels();
+          return;
+        }
 
-          // Memory Influence panel
+        // Memory Influence panel
+        try {
           const mem = d.memory_influence;
-          document.getElementById("ev_influence").innerHTML = `
+          const el = document.getElementById("ev_influence");
+          if (!el) throw new Error("DOM #ev_influence not found");
+          el.innerHTML = `
             <div class="flex justify-between"><span class="text-slate-400">Weight</span><span class="font-mono text-fuchsia-400">${mem.influence_weight}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Evaluations</span><span class="font-mono">${mem.total_evaluations}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Agreements</span><span class="font-mono text-emerald-400">${mem.agreements}</span></div>
@@ -709,10 +805,15 @@
             <div class="flex justify-between"><span class="text-slate-400">Overrides</span><span class="font-mono text-amber-400">${mem.overrides}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Blocked</span><span class="font-mono text-slate-400">${mem.blocked_overrides}</span></div>
           `;
+        } catch(e) { console.error("FAILED PANEL: ev_influence", e); panicEvPanels(); return; }
 
-          // Pattern Growth panel
+        // Pattern Growth panel
+        try {
+          console.log("[EV4] render patterns");
           const pat = d.patterns;
-          document.getElementById("ev_patterns").innerHTML = `
+          const el = document.getElementById("ev_patterns");
+          if (!el) throw new Error("DOM #ev_patterns not found");
+          el.innerHTML = `
             <div class="flex justify-between"><span class="text-slate-400">Validated</span><span class="font-mono text-emerald-400">${pat.validated_patterns}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Active</span><span class="font-mono">${pat.active_patterns}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Avg Confidence</span><span class="font-mono">${pat.avg_confidence.toFixed(2)}</span></div>
@@ -721,10 +822,15 @@
               ${d.trends.patterns.map(p => `${p.day}: +${p.new} pattern(s)`).join('<br>') || 'No pattern history'}
             </div>
           `;
+        } catch(e) { console.error("FAILED PANEL: ev_patterns", e); panicEvPanels(); return; }
 
-          // Pair Growth panel
+        // Pair Growth panel
+        try {
+          console.log("[EV5] render pairs");
           const sh = d.shadow_growth;
-          document.getElementById("ev_pairs").innerHTML = `
+          const el = document.getElementById("ev_pairs");
+          if (!el) throw new Error("DOM #ev_pairs not found");
+          el.innerHTML = `
             <div class="flex justify-between"><span class="text-slate-400">Total Obs</span><span class="font-mono">${sh.total_observations}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Resolved</span><span class="font-mono text-emerald-400">${sh.resolved_observations}</span></div>
             <div class="flex justify-between"><span class="text-slate-400">Resolved Pairs</span><span class="font-mono text-cyan-400">${sh.resolved_pairs}</span></div>
@@ -733,11 +839,16 @@
               ${d.trends.pairs.map(p => `${p.day}: ${p.pairs} pairs`).join('<br>') || 'No pair history'}
             </div>
           `;
+        } catch(e) { console.error("FAILED PANEL: ev_pairs", e); panicEvPanels(); return; }
 
-          // Scorecard
+        // Scorecard
+        try {
+          console.log("[EV6] render scorecard");
           const sc = d.scorecard;
           const evo = d.evolution;
-          document.getElementById("ev_scorecard").innerHTML = `
+          const el = document.getElementById("ev_scorecard");
+          if (!el) throw new Error("DOM #ev_scorecard not found");
+          el.innerHTML = `
             <div class="text-center mb-3">
               <div class="text-2xl font-bold ${evo.score >= 60 ? 'text-emerald-400' : evo.score >= 40 ? 'text-amber-400' : 'text-slate-400'}">${evo.score}</div>
               <div class="text-xs text-slate-400">${evo.status}</div>
@@ -750,15 +861,25 @@
               <div><div class="flex justify-between text-xs"><span>Agreement</span><span>${sc.agreement_rate}%</span></div><div class="w-full bg-slate-800 rounded-full h-1.5 mt-0.5"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${sc.agreement_rate}%"></div></div></div>
             </div>
           `;
+        } catch(e) { console.error("FAILED PANEL: ev_scorecard", e); panicEvPanels(); return; }
 
-          // What Changed Recently
-          document.getElementById("ev_changes").innerHTML = (d.recent_changes || []).length
+        // What Changed Recently
+        try {
+          console.log("[EV7] render changes");
+          const el = document.getElementById("ev_changes");
+          if (!el) throw new Error("DOM #ev_changes not found");
+          el.innerHTML = (d.recent_changes || []).length
             ? d.recent_changes.map(c => `<div class="flex items-center gap-2 text-xs"><span class="text-emerald-400">+</span>${c}</div>`).join("")
             : '<div class="text-xs text-slate-500">No recent changes detected</div>';
-            
-          // Trends: simple HTML timeline
+        } catch(e) { console.error("FAILED PANEL: ev_changes", e); panicEvPanels(); return; }
+
+        // Trends: simple HTML timeline
+        try {
+          console.log("[EV8] render trends");
           const inf = d.trends.influence;
-          document.getElementById("ev_trends").innerHTML = inf.length
+          const el = document.getElementById("ev_trends");
+          if (!el) throw new Error("DOM #ev_trends not found");
+          el.innerHTML = inf.length
             ? inf.map(t => `<div class="flex justify-between text-xs py-0.5 border-b border-slate-800/30">
                 <span class="text-slate-500">${t.day}</span>
                 <span class="text-emerald-400">${t.agrees} agree</span>
@@ -766,11 +887,15 @@
                 <span class="text-amber-400">${t.overrides} override</span>
               </div>`).join("")
             : '<div class="text-xs text-slate-500">No influence history yet</div>';
+        } catch(e) { console.error("FAILED PANEL: ev_trends", e); panicEvPanels(); return; }
 
-          // ── Pattern Evolution Chart (Row 7) ──
+        // ── Pattern Evolution Chart (Row 7) ──
+        try {
+          console.log("[EV9] render pattern chart");
           const pTrend = d.trends.patterns;
           const patChart = document.getElementById("ev_pattern_chart");
           const patTrend = document.getElementById("ev_pattern_trend");
+          if (!patChart) throw new Error("DOM #ev_pattern_chart not found");
           if (pTrend.length > 0) {
             const maxP = Math.max(...pTrend.map(p => p.new), 1);
             patChart.innerHTML = `<div class="space-y-1 text-xs">
@@ -780,12 +905,16 @@
                 return `<div class="flex items-center gap-2"><span class="w-24 text-slate-500">${p.day}</span><div class="flex-1 bg-slate-800 rounded-full h-3"><div class="bg-emerald-500 h-3 rounded-full" style="width:${pct}%"></div></div><span class="w-8 text-right text-slate-400">+${p.new}</span></div>`;
               }).join('')}
             </div>`;
-            patTrend.innerHTML = pTrend.length >= 2 && pTrend[0].new < pTrend[1].new ? '↑ Growing' : pTrend.length >= 2 ? '→ Stable' : '';
+            if (patTrend) patTrend.innerHTML = pTrend.length >= 2 && pTrend[0].new < pTrend[1].new ? '↑ Growing' : pTrend.length >= 2 ? '→ Stable' : '';
           } else { patChart.innerHTML = '<div class="text-xs text-slate-500">No pattern history yet</div>'; }
+        } catch(e) { console.error("FAILED PANEL: ev_pattern_chart", e); panicEvPanels(); return; }
 
-          // ── Memory Growth Chart (Row 7) ──
+        // ── Memory Growth Chart (Row 7) ──
+        try {
+          console.log("[EV10] render memory chart");
           const eTrend = d.trends.episodes;
           const memChart = document.getElementById("ev_memory_chart");
+          if (!memChart) throw new Error("DOM #ev_memory_chart not found");
           if (eTrend.length > 0) {
             const maxEps = Math.max(...eTrend.map(e => e.eps), 1);
             memChart.innerHTML = `<div class="space-y-1 text-xs">
@@ -804,12 +933,16 @@
               }).join('')}
             </div>`;
           } else { memChart.innerHTML = '<div class="text-xs text-slate-500">No episode history yet</div>'; }
+        } catch(e) { console.error("FAILED PANEL: ev_memory_chart", e); panicEvPanels(); return; }
 
-          // ── Pair Resolution Chart (Row 8) ──
+        // ── Pair Resolution Chart (Row 8) ──
+        try {
+          console.log("[EV11] render pair chart");
           const pairChart = document.getElementById("ev_pair_chart");
           const pairTrend = document.getElementById("ev_pair_trend");
           const shData = d.shadow_growth;
           const pairT = d.trends.pairs;
+          if (!pairChart) throw new Error("DOM #ev_pair_chart not found");
           if (pairT.length > 0) {
             const maxP2 = Math.max(...pairT.map(p => p.pairs), 1);
             pairChart.innerHTML = `<div class="space-y-1 text-xs">
@@ -826,11 +959,15 @@
                 return `<div class="flex items-center gap-2"><span class="w-24 text-slate-500">${p.day}</span><div class="flex-1 bg-slate-800 rounded-full h-3"><div class="bg-cyan-500 h-3 rounded-full" style="width:${pct}%"></div></div><span class="w-12 text-right text-slate-400">${p.pairs}</span></div>`;
               }).join('')}
             </div>`;
-            pairTrend.innerHTML = pairT.length >= 2 ? '↑ Growing' : '';
+            if (pairTrend) pairTrend.innerHTML = pairT.length >= 2 ? '↑ Growing' : '';
           } else { pairChart.innerHTML = '<div class="text-xs text-slate-500">No pair history yet</div>'; }
+        } catch(e) { console.error("FAILED PANEL: ev_pair_chart", e); panicEvPanels(); return; }
 
-          // ── Pattern Leaderboard (Row 8) ──
+        // ── Pattern Leaderboard (Row 8) ──
+        try {
+          console.log("[EV12] render leaderboard");
           const lb = document.getElementById("ev_leaderboard");
+          if (!lb) throw new Error("DOM #ev_leaderboard not found");
           const patterns = d.all_patterns || [];
           if (patterns.length > 0) {
             lb.innerHTML = patterns.map((p, i) => {
@@ -852,9 +989,13 @@
               </div>`;
             }).join('');
           } else { lb.innerHTML = '<div class="text-xs text-slate-500">No patterns mined yet</div>'; }
+        } catch(e) { console.error("FAILED PANEL: ev_leaderboard", e); panicEvPanels(); return; }
 
-          // ── AI Lifecycle (Row 9) ──
+        // ── AI Lifecycle (Row 9) ──
+        try {
+          console.log("[EV13] render lifecycle");
           const lc = document.getElementById("ev_lifecycle");
+          if (!lc) throw new Error("DOM #ev_lifecycle not found");
           const lcData = d.lifecycle;
           if (lcData && lcData.stages) {
             lc.innerHTML = `<div class="space-y-1.5 text-xs">
@@ -867,10 +1008,15 @@
               }).join('')}
             </div>`;
           } else { lc.innerHTML = '<div class="text-xs text-slate-500">Lifecycle data unavailable</div>'; }
+        } catch(e) { console.error("FAILED PANEL: ev_lifecycle", e); panicEvPanels(); return; }
 
-          // ── AI Age + 24h Changes (Row 9) ──
+        // ── AI Age + 24h Changes (Row 9) ──
+        try {
+          console.log("[EV14] render age");
           const age = document.getElementById("ev_age");
+          if (!age) throw new Error("DOM #ev_age not found");
           const c24 = d.changes_24h || {};
+          const shData = d.shadow_growth;
           age.innerHTML = `<div class="grid grid-cols-2 gap-2 text-xs">
             <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-center">
               <div class="text-slate-400">AI Age</div>
@@ -899,9 +1045,275 @@
               </div>
             </div>
           </div>`;
+        } catch(e) { console.error("FAILED PANEL: ev_age", e); panicEvPanels(); return; }
 
+        console.log("[EV15] evolution render complete");
+      }
+
+      function panicEvPanels() {
+        const ids = ["ev_influence","ev_patterns","ev_pairs","ev_scorecard","ev_changes","ev_trends","ev_pattern_chart","ev_memory_chart","ev_pair_chart","ev_leaderboard","ev_lifecycle","ev_age"];
+        ids.forEach(id => {
+          const el = document.getElementById(id);
+          if (el) el.innerHTML = '<div class="text-xs text-rose-400">Error loading evolution</div>';
+        });
+      }
+
+      // Load performance over time data
+      async function loadPerformanceOverTime() {
+        try {
+          const r = await fetch("/api/agent/performance-over-time");
+          const d = await r.json();
+          if (d.error) throw new Error(d.error);
+
+          // ── 1. Learning Curve ──
+          const lc = d.learning_curve;
+          const lcEl = document.getElementById("lc_chart");
+          const lcTrend = document.getElementById("lc_trend");
+          if (lc.length > 0) {
+            const maxPatterns = Math.max(...lc.map(x => x.validated_patterns), 1);
+            const maxConf = 1.0;
+            lcEl.innerHTML = `<div class="space-y-1.5 text-xs">
+              <div class="grid grid-cols-4 gap-2 text-slate-400 mb-2 pb-1 border-b border-slate-800">
+                <span>Date</span>
+                <span>Validated Patterns</span>
+                <span>Avg Confidence</span>
+                <span>Agreement Rate</span>
+              </div>
+              ${lc.slice(-14).map(x => {
+                const pctP = (x.validated_patterns / maxPatterns * 100).toFixed(0);
+                const pctC = (x.avg_confidence / maxConf * 100).toFixed(0);
+                const pctA = x.agreement_rate;
+                return `<div class="grid grid-cols-4 gap-2 items-center py-0.5 border-b border-slate-800/20">
+                  <span class="text-slate-500">${x.day}</span>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-2"><div class="bg-emerald-500 h-2 rounded-full" style="width:${pctP}%"></div></div>
+                    <span class="w-8 text-right text-slate-300">${x.validated_patterns}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-2"><div class="bg-violet-500 h-2 rounded-full" style="width:${pctC}%"></div></div>
+                    <span class="w-10 text-right text-slate-300">${x.avg_confidence.toFixed(2)}</span>
+                  </div>
+                  <span class="text-right text-slate-300">${x.agreement_rate}%</span>
+                </div>`;
+              }).join('')}
+            </div>`;
+            const first = lc[0];
+            const last = lc[lc.length - 1];
+            const trendDir = last.validated_patterns > first.validated_patterns ? '↑' : last.validated_patterns < first.validated_patterns ? '↓' : '→';
+            lcTrend.innerHTML = `${trendDir} ${first.day} → ${last.day}`;
+          } else {
+            lcEl.innerHTML = '<div class="text-xs text-slate-500">No learning curve data yet</div>';
+          }
+
+          // ── 2. Intelligence Score ──
+          document.getElementById("is_today").textContent = d.today_score.toFixed(1);
+          document.getElementById("is_yesterday").textContent = d.yesterday_score.toFixed(1);
+          const deltaEl = document.getElementById("is_delta");
+          const deltaVal = d.score_delta;
+          deltaEl.textContent = (deltaVal >= 0 ? '+' : '') + deltaVal.toFixed(1);
+          deltaEl.className = "text-xl font-mono font-bold " + (deltaVal >= 0 ? 'text-emerald-400' : 'text-rose-400');
+
+          // 7d sparkline (mini inline chart using unicode blocks)
+          const trend7 = d.score_7day_trend || [];
+          const sparkEl = document.getElementById("is_7d_sparkline");
+          if (trend7.length > 1) {
+            const min = Math.min(...trend7);
+            const max = Math.max(...trend7);
+            const range = max - min || 1;
+            // Unicode block chars: ▁▂▃▄▅▆▇█
+            const blocks = ['▁','▂','▃','▄','▅','▆','▇','█'];
+            const sparkline = trend7.map(v => {
+              const idx = Math.min(7, Math.floor((v - min) / range * 7));
+              const color = v >= trend7[0] ? 'text-emerald-400' : 'text-rose-400';
+              return `<span class="${color}">${blocks[idx]}</span>`;
+            }).join('');
+            sparkEl.innerHTML = sparkline + ` <span class="text-slate-500">${trend7[0].toFixed(1)}→${trend7[trend7.length-1].toFixed(1)}</span>`;
+          } else {
+            sparkEl.textContent = trend7.length === 1 ? trend7[0].toFixed(1) : '—';
+          }
+
+          // Intelligence Score chart (stacked bar components)
+          const isScores = d.intelligence_scores;
+          const isChart = document.getElementById("is_chart");
+          if (isScores.length > 0) {
+            const maxScore = 100;
+            isChart.innerHTML = `<div class="space-y-1 text-xs">
+              <div class="grid grid-cols-6 gap-1 text-slate-400 mb-1 pb-1 border-b border-slate-800">
+                <span>Day</span><span>Score</span><span>Pattern</span><span>Pair</span><span>Conf</span><span>Contrib</span>
+              </div>
+              ${isScores.slice(-10).map(s => {
+                const pct = (s.score / maxScore * 100).toFixed(0);
+                const pPct = (s.pattern_health / maxScore * 100).toFixed(0);
+                const rPct = (s.pair_health / maxScore * 100).toFixed(0);
+                const cPct = (s.confidence / maxScore * 100).toFixed(0);
+                const coPct = (s.contribution / maxScore * 100).toFixed(0);
+                return `<div class="grid grid-cols-6 gap-1 items-center py-0.5 border-b border-slate-800/20">
+                  <span class="text-slate-500">${s.day}</span>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-2"><div class="bg-fuchsia-500 h-2 rounded-full" style="width:${pct}%"></div></div>
+                    <span class="w-6 text-right text-slate-200 font-mono">${s.score.toFixed(0)}</span>
+                  </div>
+                  <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${pPct}%"></div></div>
+                  <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-cyan-500 h-1.5 rounded-full" style="width:${rPct}%"></div></div>
+                  <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-violet-500 h-1.5 rounded-full" style="width:${cPct}%"></div></div>
+                  <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-amber-500 h-1.5 rounded-full" style="width:${coPct}%"></div></div>
+                </div>`;
+              }).join('')}
+            </div>`;
+          } else {
+            isChart.innerHTML = '<div class="text-xs text-slate-500">No intelligence score history</div>';
+          }
+
+          // ── 3. Pattern Birth Timeline ──
+          const births = d.pattern_births || [];
+          const pbEl = document.getElementById("pb_timeline");
+          if (births.length > 0) {
+            pbEl.innerHTML = births.map(b => {
+              const eventsHtml = b.events.map(e =>
+                `<div class="flex items-center gap-2 ml-6 py-0.5">
+                  <span class="text-emerald-400 font-bold">+</span>
+                  <span class="font-mono text-slate-200">${e.pattern_key}</span>
+                  <span class="text-xs text-slate-500">${e.action_type} · ${modeBadge(e.survival_mode)}</span>
+                </div>`
+              ).join('');
+              return `<div class="py-1 border-b border-slate-800/30">
+                <div class="flex items-center gap-2 text-slate-400 font-semibold">
+                  <i class="fa-solid fa-calendar-day text-amber-400 text-xs"></i>
+                  <span>${b.day}</span>
+                  <span class="text-xs text-slate-500">${b.events.length} pattern(s)</span>
+                </div>
+                ${eventsHtml}
+              </div>`;
+            }).join('');
+          } else {
+            pbEl.innerHTML = '<div class="text-xs text-slate-500">No pattern births recorded</div>';
+          }
+
+          // ── 4. Memory Effectiveness Trend ──
+          const me = d.memory_effectiveness || [];
+          const meEl = document.getElementById("me_chart");
+          if (me.length > 0) {
+            const maxVal = Math.max(...me.map(x => Math.max(x.agreements, x.disagreements, x.overrides, x.blocked_overrides)), 1);
+            meEl.innerHTML = `<div class="space-y-1 text-xs">
+              <div class="grid grid-cols-5 gap-1 text-slate-400 mb-1 pb-1 border-b border-slate-800">
+                <span>Day</span><span>Agree</span><span>Disagree</span><span>Override</span><span>Blocked</span>
+              </div>
+              ${me.slice(-14).map(m => {
+                const aPct = (m.agreements / maxVal * 100).toFixed(0);
+                const dPct = (m.disagreements / maxVal * 100).toFixed(0);
+                const oPct = (m.overrides / maxVal * 100).toFixed(0);
+                const bPct = (m.blocked_overrides / maxVal * 100).toFixed(0);
+                return `<div class="grid grid-cols-5 gap-1 items-center py-0.5 border-b border-slate-800/20">
+                  <span class="text-slate-500">${m.day}</span>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-emerald-500 h-1.5 rounded-full" style="width:${aPct}%"></div></div>
+                    <span class="w-4 text-right text-slate-300">${m.agreements}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-rose-500 h-1.5 rounded-full" style="width:${dPct}%"></div></div>
+                    <span class="w-4 text-right text-slate-300">${m.disagreements}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-amber-500 h-1.5 rounded-full" style="width:${oPct}%"></div></div>
+                    <span class="w-4 text-right text-slate-300">${m.overrides}</span>
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <div class="flex-1 bg-slate-800 rounded-full h-1.5"><div class="bg-slate-600 h-1.5 rounded-full" style="width:${bPct}%"></div></div>
+                    <span class="w-4 text-right text-slate-300">${m.blocked_overrides}</span>
+                  </div>
+                </div>`;
+              }).join('')}
+            </div>`;
+          } else {
+            meEl.innerHTML = '<div class="text-xs text-slate-500">No memory effectiveness data yet</div>';
+          }
+
+          // ── 5. Improvement Detector ──
+          const idEl = document.getElementById("id_panel");
+          const status = d.improvement_status || "STABLE";
+          const signals = d.improvement_signals || {};
+          const statusColors = {
+            ACCELERATING: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+            IMPROVING: "text-sky-400 bg-sky-500/10 border-sky-500/30",
+            STABLE: "text-amber-400 bg-amber-500/10 border-amber-500/30",
+            DECLINING: "text-rose-400 bg-rose-500/10 border-rose-500/30",
+          };
+          const statusIcons = {
+            ACCELERATING: '<i class="fa-solid fa-rocket"></i>',
+            IMPROVING: '<i class="fa-solid fa-arrow-trend-up"></i>',
+            STABLE: '<i class="fa-solid fa-equals"></i>',
+            DECLINING: '<i class="fa-solid fa-arrow-trend-down"></i>',
+          };
+          const sc = statusColors[status] || statusColors.STABLE;
+          const si = statusIcons[status] || statusIcons.STABLE;
+          const signalLabels = {
+            confidence: { label: 'Confidence Trend', up: '📈', down: '📉', stable: '➡️' },
+            pattern_growth: { label: 'Pattern Growth', up: '📈', down: '📉', stable: '➡️' },
+            contribution: { label: 'Contribution', up: '📈', down: '📉', stable: '➡️' },
+            agreement: { label: 'Agreement', up: '📈', down: '📉', stable: '➡️' },
+          };
+          idEl.innerHTML = `
+            <div class="rounded-lg border p-3 text-center text-lg font-bold ${sc}">
+              ${si} ${status}
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              ${Object.entries(signalLabels).map(([key, val]) => {
+                const trend = signals[key] || 'stable';
+                const emoji = val[trend] || val.stable;
+                return `<div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-xs">
+                  <div class="text-slate-400">${val.label}</div>
+                  <div class="font-mono text-lg ${trend === 'up' ? 'text-emerald-400' : trend === 'down' ? 'text-rose-400' : 'text-slate-300'}">${emoji} ${trend}</div>
+                </div>`;
+              }).join('')}
+            </div>`;
+          // Add contribution trend bar
+          const contribVals = lc.slice(-7).map(x => x.avg_contribution);
+          if (contribVals.length > 0) {
+            const maxContrib = Math.max(...contribVals, 0.01);
+            idEl.innerHTML += `<div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-xs">
+              <div class="text-slate-400 mb-1">Contribution Sparkline (7d)</div>
+              <div class="flex items-end gap-0.5 h-8">${contribVals.map(v => {
+                const pct = (v / maxContrib * 100).toFixed(0);
+                return `<div class="flex-1 bg-amber-500 rounded-t" style="height:${pct}%"></div>`;
+              }).join('')}</div>
+            </div>`;
+          }
+
+          // ── 6. Evolution Forecast ──
+          const fc = d.forecast || {};
+          const efEl = document.getElementById("ef_panel");
+          efEl.innerHTML = `
+            <div class="grid grid-cols-2 gap-2">
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-3 text-center">
+                <div class="text-xs text-slate-400">Patterns (7d)</div>
+                <div class="text-xl font-mono text-emerald-400">${fc.patterns_7d ?? '—'}</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-3 text-center">
+                <div class="text-xs text-slate-400">Pairs (7d)</div>
+                <div class="text-xl font-mono text-cyan-400">${fc.pairs_7d ?? '—'}</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-3 text-center">
+                <div class="text-xs text-slate-400">Confidence (7d)</div>
+                <div class="text-xl font-mono text-violet-400">${fc.confidence_7d !== undefined ? fc.confidence_7d.toFixed(2) : '—'}</div>
+              </div>
+              <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-3 text-center">
+                <div class="text-xs text-slate-400">AI Score (7d)</div>
+                <div class="text-xl font-mono text-fuchsia-400">${fc.ai_score_7d !== undefined ? fc.ai_score_7d.toFixed(1) : '—'}</div>
+              </div>
+            </div>
+            <div class="rounded-lg bg-slate-950/40 border border-slate-800 p-2 text-xs">
+              <div class="text-slate-400 mb-1">Trend Directions</div>
+              <div class="grid grid-cols-2 gap-1">
+                <span>Confidence: <span class="${fc.confidence_trend === 'up' ? 'text-emerald-400' : fc.confidence_trend === 'down' ? 'text-rose-400' : 'text-slate-300'}">${fc.confidence_trend || 'stable'}</span></span>
+                <span>Contribution: <span class="${fc.contribution_trend === 'up' ? 'text-emerald-400' : fc.contribution_trend === 'down' ? 'text-rose-400' : 'text-slate-300'}">${fc.contribution_trend || 'stable'}</span></span>
+                <span>Agreement: <span class="${fc.agreement_trend === 'up' ? 'text-emerald-400' : fc.agreement_trend === 'down' ? 'text-rose-400' : 'text-slate-300'}">${fc.agreement_trend || 'stable'}</span></span>
+                <span>Pattern Growth: <span class="${fc.pattern_growth_trend === 'up' ? 'text-emerald-400' : fc.pattern_growth_trend === 'down' ? 'text-rose-400' : 'text-slate-300'}">${fc.pattern_growth_trend || 'stable'}</span></span>
+              </div>
+            </div>
+          `;
         } catch (e) {
-          document.getElementById("ev_influence").innerHTML = '<div class="text-xs text-rose-400">Error loading evolution</div>';
+          document.getElementById("perf_status").textContent = "⚠ Error";
+          document.getElementById("lc_chart").innerHTML = '<div class="text-xs text-rose-400">Error loading performance data</div>';
         }
       }
 
@@ -912,6 +1324,7 @@
           loadTimeline(), loadReasoning(), loadShadow(),
           loadAnalysts(), loadConsensus(),
           loadEvolution(),
+          loadPerformanceOverTime(),
         ]);
         // Update banner from health data
         try {

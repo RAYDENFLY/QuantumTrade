@@ -1181,7 +1181,6 @@ def api_agent_evolution() -> Dict[str, Any]:
             "override_count": mem["overrides"],
         }
 
-        conn.close()
         return {
             "patterns": patterns,
             "memory_influence": mem,
@@ -1210,6 +1209,7 @@ def api_agent_evolution() -> Dict[str, Any]:
         }
     except Exception as e:
         return {"error": str(e), "patterns": {}, "memory_influence": {}, "shadow_growth": {}, "scorecard": {}, "evolution": {}, "trends": {}, "recent_changes": []}
+
 
 @app.get("/api/agent/health")
 def api_agent_health() -> Dict[str, Any]:
@@ -1903,3 +1903,409 @@ def api_docs_summary_v2() -> Dict[str, Any]:
             },
         },
     }
+
+
+# ===========================================================================
+# PHASE 8.4.4 — AI PERFORMANCE OVER TIME
+# ===========================================================================
+
+@app.get("/api/agent/performance-over-time")
+def api_agent_performance_over_time() -> Dict[str, Any]:
+    """AI Performance Over Time — learning curve, intelligence score, pattern birth,
+    memory effectiveness, improvement detector, and forecast.
+
+    This endpoint powers the "PHASE 8.4.4 — AI PERFORMANCE OVER TIME" dashboard section.
+
+    Response schema:
+    {
+      "learning_curve": [  # daily trends
+        {"day": "2026-06-20", "validated_patterns": 0, "avg_confidence": 0.5,
+         "avg_contribution": 0.0, "agreement_rate": 0.0, "plan_count": 0}
+      ],
+      "intelligence_scores": [
+        {"day": "2026-06-20", "score": 0.0, "pattern_health": 0, "pair_health": 0,
+         "confidence": 0, "contribution": 0, "agreement": 0}
+      ],
+      "today_score": float,
+      "yesterday_score": float,
+      "score_7day_trend": [float],
+      "score_delta": float,
+      "pattern_births": [
+        {"day": "2026-06-20", "events": [{"pattern_key": "TIGHTEN_RISK|CONSERVATIVE", "action_type": "TIGHTEN_RISK", "survival_mode": "CONSERVATIVE"}]}
+      ],
+      "memory_effectiveness": [
+        {"day": "2026-06-20", "agreements": 0, "disagreements": 0, "overrides": 0, "blocked_overrides": 0}
+      ],
+      "improvement_status": "IMPROVING" | "DECLINING" | "STABLE" | "ACCELERATING",
+      "improvement_signals": {"confidence": "up", "pattern_growth": "up", "contribution": "stable", "agreement": "up"},
+      "forecast": {
+        "patterns_7d": int,
+        "pairs_7d": int,
+        "confidence_7d": float,
+        "ai_score_7d": float,
+        "confidence_trend": float,
+        "contribution_trend": float,
+        "agreement_trend": float,
+        "pattern_growth_trend": float
+      }
+    }
+    """
+    try:
+        storage = _get_agent_storage()
+        conn = storage._get_conn()
+        cur = conn.cursor()
+
+        def fetch_one(sql):
+            cur.execute(sql)
+            return cur.fetchone()
+
+        def fetch_all(sql):
+            cur.execute(sql)
+            return cur.fetchall()
+
+        # ─────────────────────────────────────────────────────────────────
+        # 1. LEARNING CURVE — daily aggregated metrics
+        # ─────────────────────────────────────────────────────────────────
+
+        # Daily validated pattern counts (from semantic_patterns.first_seen)
+        daily_patterns = fetch_all("""
+            SELECT DATE(first_seen) as day,
+                   COUNT(*) FILTER (WHERE validated=TRUE) as validated_count
+            FROM semantic_patterns
+            GROUP BY DATE(first_seen) ORDER BY day
+        """)
+        patterns_by_day = {str(r[0]): int(r[1]) for r in daily_patterns}
+
+        # Daily average confidence from agent_plans (plan_json->>confidence)
+        daily_confidence = fetch_all("""
+            SELECT DATE(ts) as day,
+                   AVG(CAST(plan_json->>'confidence' AS FLOAT)) as avg_conf,
+                   COUNT(*) as plan_count
+            FROM agent_plans
+            WHERE plan_json->>'confidence' IS NOT NULL
+              AND plan_json->>'confidence' ~ '^[0-9]+(\.[0-9]+)?$'
+            GROUP BY DATE(ts) ORDER BY day
+        """)
+        confidence_by_day = {}
+        plan_count_by_day = {}
+        for r in daily_confidence:
+            day = str(r[0])
+            confidence_by_day[day] = float(r[1] or 0.5)
+            plan_count_by_day[day] = int(r[2] or 0)
+
+        # Daily average contribution from memory_attributions
+        daily_contrib = fetch_all("""
+            SELECT DATE(ts) as day,
+                   AVG(memory_contribution_score) as avg_contrib
+            FROM memory_attributions
+            WHERE outcome_quality NOT IN ('pending')
+            GROUP BY DATE(ts) ORDER BY day
+        """)
+        contrib_by_day = {str(r[0]): float(r[1] or 0) for r in daily_contrib}
+
+        # Daily agreement rate from shadow_memory_influence
+        daily_agreement = fetch_all("""
+            SELECT DATE(ts) as day,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN agreement='AGREE' THEN 1 ELSE 0 END) as agrees
+            FROM shadow_memory_influence
+            GROUP BY DATE(ts) ORDER BY day
+        """)
+        agreement_by_day = {}
+        for r in daily_agreement:
+            day = str(r[0])
+            total = int(r[1] or 0)
+            agrees = int(r[2] or 0)
+            agreement_by_day[day] = round(agrees / max(1, total), 4)
+
+        # Union all days for a complete timeline
+        all_days_sql = fetch_all("""
+            SELECT DISTINCT day FROM (
+                SELECT DATE(first_seen) as day FROM semantic_patterns
+                UNION
+                SELECT DATE(ts) FROM agent_plans
+                UNION
+                SELECT DATE(ts) FROM memory_attributions
+                UNION
+                SELECT DATE(ts) FROM shadow_memory_influence
+                UNION
+                SELECT DATE(ts) FROM shadow_observations
+            ) sub WHERE day IS NOT NULL
+            ORDER BY day
+        """)
+        all_days = [str(r[0]) for r in all_days_sql]
+
+        learning_curve = []
+        running_validated = 0
+        for day in all_days:
+            running_validated += patterns_by_day.get(day, 0)
+            learning_curve.append({
+                "day": day,
+                "validated_patterns": running_validated,
+                "avg_confidence": round(confidence_by_day.get(day, 0.5), 4),
+                "avg_contribution": round(contrib_by_day.get(day, 0.0), 4),
+                "agreement_rate": round(agreement_by_day.get(day, 0.0) * 100, 1),
+                "plan_count": plan_count_by_day.get(day, 0),
+            })
+
+        # ─────────────────────────────────────────────────────────────────
+        # 2. INTELLIGENCE SCORE TIMELINE
+        # ─────────────────────────────────────────────────────────────────
+
+        # Running totals for score computation
+        running_validated_pairs_sql = fetch_all("""
+            SELECT DATE(so.ts) as day,
+                   COUNT(*) as daily_resolved
+            FROM shadow_observations so
+            WHERE so.status='RESOLVED'
+            GROUP BY DATE(so.ts) ORDER BY day
+        """)
+        pairs_by_day = {str(r[0]): int(r[1]) for r in running_validated_pairs_sql}
+
+        # Also need aggregated memory_attributions count per day
+        daily_attributions = fetch_all("""
+            SELECT DATE(ts) as day, COUNT(*) as attr_count
+            FROM memory_attributions WHERE outcome_quality NOT IN ('pending')
+            GROUP BY DATE(ts) ORDER BY day
+        """)
+        attr_by_day = {str(r[0]): int(r[1]) for r in daily_attributions}
+
+        # Validation scores per day
+        daily_valid_scores = fetch_all("""
+            SELECT DATE(last_validated_at) as day,
+                   AVG(validation_score) as avg_val
+            FROM semantic_patterns
+            WHERE validated=TRUE AND last_validated_at IS NOT NULL
+            GROUP BY DATE(last_validated_at) ORDER BY day
+        """)
+        valscore_by_day = {str(r[0]): float(r[1] or 0) for r in daily_valid_scores}
+
+        intelligence_scores = []
+        running_validated = 0
+        running_pairs = 0
+        for day in all_days:
+            running_validated += patterns_by_day.get(day, 0)
+            running_pairs += pairs_by_day.get(day, 0)
+
+            # Confidence: running avg weighted by plan count
+            day_conf = confidence_by_day.get(day, 0.5)
+            day_contrib = contrib_by_day.get(day, 0.0)
+            day_agree = agreement_by_day.get(day, 0.5)
+
+            pattern_health = min(100, running_validated / 5 * 100)
+            pair_health = min(100, running_pairs / 500 * 100)
+            conf_health = day_conf * 100
+            contrib_health = day_contrib * 100
+            agree_health = day_agree * 100
+
+            score = round(
+                pattern_health * 0.25 +
+                pair_health * 0.25 +
+                conf_health * 0.20 +
+                contrib_health * 0.15 +
+                agree_health * 0.15,
+                1,
+            )
+
+            intelligence_scores.append({
+                "day": day,
+                "score": score,
+                "pattern_health": round(pattern_health, 1),
+                "pair_health": round(pair_health, 1),
+                "confidence": round(conf_health, 1),
+                "contribution": round(contrib_health, 1),
+                "agreement": round(agree_health, 1),
+            })
+
+        # Today, yesterday, 7d trend
+        today_str = str(all_days[-1]) if all_days else ""
+        yesterday_str = str(all_days[-2]) if len(all_days) >= 2 else ""
+        today_score = intelligence_scores[-1]["score"] if intelligence_scores else 0.0
+        yesterday_score = intelligence_scores[-2]["score"] if len(intelligence_scores) >= 2 else 0.0
+        score_delta = round(today_score - yesterday_score, 1)
+        score_7day_trend = [s["score"] for s in intelligence_scores[-7:]] if len(intelligence_scores) >= 7 else [s["score"] for s in intelligence_scores]
+
+        # ─────────────────────────────────────────────────────────────────
+        # 3. PATTERN BIRTH TIMELINE
+        # ─────────────────────────────────────────────────────────────────
+
+        pattern_births_raw = fetch_all("""
+            SELECT DATE(first_seen) as day,
+                   pattern_key,
+                   action_type,
+                   condition_json->>'survival_mode' as survival_mode
+            FROM semantic_patterns
+            ORDER BY first_seen ASC
+        """)
+
+        pattern_births = {}
+        for r in pattern_births_raw:
+            day = str(r[0])
+            if day not in pattern_births:
+                pattern_births[day] = []
+            # Extract survival mode from condition_json if available
+            mode = r[3] if r[3] else "NORMAL"
+            pattern_births[day].append({
+                "pattern_key": str(r[1]),
+                "action_type": str(r[2]),
+                "survival_mode": mode,
+            })
+
+        # Convert to sorted timeline
+        pattern_birth_timeline = []
+        for day in sorted(pattern_births.keys()):
+            pattern_birth_timeline.append({
+                "day": day,
+                "events": pattern_births[day],
+            })
+
+        # ─────────────────────────────────────────────────────────────────
+        # 4. MEMORY EFFECTIVENESS TREND
+        # ─────────────────────────────────────────────────────────────────
+
+        mem_effectiveness = fetch_all("""
+            SELECT DATE(ts) as day,
+                   COUNT(*) as total,
+                   SUM(CASE WHEN agreement='AGREE' THEN 1 ELSE 0 END) as agreements,
+                   SUM(CASE WHEN agreement='DISAGREE' THEN 1 ELSE 0 END) as disagreements,
+                   SUM(CASE WHEN influence_weight > 0 THEN 1 ELSE 0 END) as overrides,
+                   SUM(CASE WHEN agreement='DISAGREE' AND influence_weight = 0 THEN 1 ELSE 0 END) as blocked_overrides
+            FROM shadow_memory_influence
+            GROUP BY DATE(ts) ORDER BY day
+        """)
+        memory_effectiveness_timeline = []
+        for r in mem_effectiveness:
+            memory_effectiveness_timeline.append({
+                "day": str(r[0]),
+                "agreements": int(r[2] or 0),
+                "disagreements": int(r[3] or 0),
+                "overrides": int(r[4] or 0),
+                "blocked_overrides": int(r[5] or 0),
+            })
+
+        # ─────────────────────────────────────────────────────────────────
+        # 5. IMPROVEMENT DETECTOR
+        # ─────────────────────────────────────────────────────────────────
+
+        # Analyze last 7 days vs previous 7 days
+        def safe_trend(values, higher_is_better=True):
+            """Returns 'up', 'down', or 'stable'"""
+            if len(values) < 4:
+                return "stable"
+            # Use linear regression slope
+            n = len(values)
+            xs = list(range(n))
+            mean_x = sum(xs) / n
+            mean_y = sum(values) / n
+            num = sum((xs[i] - mean_x) * (values[i] - mean_y) for i in range(n))
+            den = sum((xs[i] - mean_x) ** 2 for i in range(n))
+            slope = num / den if den > 0 else 0
+            threshold = max(0.01, abs(mean_y * 0.02) if mean_y != 0 else 0.01)
+            if slope > threshold:
+                return "up"
+            elif slope < -threshold:
+                return "down"
+            return "stable"
+
+        # Confidence trend from learning_curve (last 14 data points)
+        conf_values = [x["avg_confidence"] for x in learning_curve[-14:]] if len(learning_curve) >= 2 else []
+        pattern_growth_values = [x["validated_patterns"] for x in learning_curve[-14:]] if len(learning_curve) >= 2 else []
+        contrib_values = [x["avg_contribution"] for x in learning_curve[-14:]] if len(learning_curve) >= 2 else []
+        agreement_values = [x["agreement_rate"] for x in learning_curve[-14:]] if len(learning_curve) >= 2 else []
+
+        conf_trend = safe_trend(conf_values)
+        pattern_trend = safe_trend(pattern_growth_values)
+        contrib_trend = safe_trend(contrib_values)
+        agreement_trend = safe_trend(agreement_values)
+
+        improvement_signals = {
+            "confidence": conf_trend,
+            "pattern_growth": pattern_trend,
+            "contribution": contrib_trend,
+            "agreement": agreement_trend,
+        }
+
+        up_count = sum(1 for v in improvement_signals.values() if v == "up")
+        down_count = sum(1 for v in improvement_signals.values() if v == "down")
+        accelerating = (conf_trend == "up" and pattern_trend == "up" and contrib_trend == "up" and agreement_trend == "up")
+
+        if accelerating:
+            improvement_status = "ACCELERATING"
+        elif up_count >= 3 and down_count == 0:
+            improvement_status = "IMPROVING"
+        elif down_count >= 2:
+            improvement_status = "DECLINING"
+        else:
+            improvement_status = "STABLE"
+
+        # ─────────────────────────────────────────────────────────────────
+        # 6. EVOLUTION FORECAST (simple trend extrapolation)
+        # ─────────────────────────────────────────────────────────────────
+
+        def extrapolate(values, days_ahead=7):
+            """Simple linear extrapolation"""
+            if len(values) < 2:
+                return values[-1] if values else 0
+            n = len(values)
+            xs = list(range(n))
+            mean_x = sum(xs) / n
+            mean_y = sum(values) / n
+            num = sum((xs[i] - mean_x) * (values[i] - mean_y) for i in range(n))
+            den = sum((xs[i] - mean_x) ** 2 for i in range(n))
+            slope = num / den if den > 0 else 0
+            last_x = n - 1
+            return round(values[-1] + slope * days_ahead, 4)
+
+        # Running totals for forecast
+        current_validated = running_validated
+        current_pairs = running_pairs
+        current_conf = confidence_by_day.get(today_str, 0.5) if today_str else 0.5
+        current_score = today_score
+
+        # Use last 14 days of daily growth rates for extrapolation
+        daily_pattern_growth = [patterns_by_day.get(d, 0) for d in all_days[-14:]] if all_days else []
+        daily_pair_growth = [pairs_by_day.get(d, 0) for d in all_days[-14:]] if all_days else []
+        daily_conf_vals = [confidence_by_day.get(d, 0.5) for d in all_days[-14:]] if all_days else []
+
+        forecast = {
+            "patterns_7d": max(0, int(round(extrapolate(daily_pattern_growth, 7))) + current_validated),
+            "pairs_7d": max(0, int(round(extrapolate(daily_pair_growth, 7))) + current_pairs),
+            "confidence_7d": min(1.0, max(0.0, extrapolate(daily_conf_vals, 7))),
+            "ai_score_7d": min(100, max(0, extrapolate([s["score"] for s in intelligence_scores], 7))),
+            "confidence_trend": conf_trend,
+            "contribution_trend": contrib_trend,
+            "agreement_trend": agreement_trend,
+            "pattern_growth_trend": pattern_trend,
+        }
+
+        return {
+            "learning_curve": learning_curve,
+            "intelligence_scores": intelligence_scores,
+            "today_score": today_score,
+            "yesterday_score": yesterday_score,
+            "score_7day_trend": score_7day_trend,
+            "score_delta": score_delta,
+            "pattern_births": pattern_birth_timeline,
+            "memory_effectiveness": memory_effectiveness_timeline,
+            "improvement_status": improvement_status,
+            "improvement_signals": improvement_signals,
+            "forecast": forecast,
+        }
+
+    except Exception as e:
+        import traceback
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "learning_curve": [],
+            "intelligence_scores": [],
+            "today_score": 0.0,
+            "yesterday_score": 0.0,
+            "score_7day_trend": [],
+            "score_delta": 0.0,
+            "pattern_births": [],
+            "memory_effectiveness": [],
+            "improvement_status": "STABLE",
+            "improvement_signals": {},
+            "forecast": {},
+        }
