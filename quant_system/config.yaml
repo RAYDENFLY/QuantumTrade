@@ -51,7 +51,7 @@ execution:
 display:
   usdt_to_idr: 16000
   starting_capital_usdt: 1375.0
-execution_mode: gate
+execution_mode: TESTNET
 gate:
   api_key: ''
   api_secret: ''

@@ -288,6 +288,61 @@ class AutonomousAgent:
         # Phase 9.2 — Reasoning Validator (audits every LLM plan)
         self._reasoning_validator = ReasoningValidator(storage=self._storage)
 
+        # Phase 10 — ExecutionEngine (unified testnet/prod execution)
+        self._execution_engine: Any = None
+        try:
+            from quant_system.execution.execution_engine import ExecutionEngine, ExecutionMode
+            from quant_system.execution.gate_executor import GateExecutor
+
+            exec_mode = ExecutionMode(cfg.get("execution_mode", "TESTNET").upper())
+            gate_cfg = cfg.get("gate", {}) if hasattr(cfg, 'get') else {}
+            gate_api_key = os.environ.get("GATE_API_KEY", "")
+            gate_api_secret = os.environ.get("GATE_API_SECRET", "")
+            gate_base_url = gate_cfg.get("base_url", "https://api-testnet.gateapi.io/api/v4") if isinstance(gate_cfg.get("base_url"), str) else "https://api-testnet.gateapi.io/api/v4"
+
+            executor = GateExecutor(
+                api_key=gate_api_key or "",
+                api_secret=gate_api_secret or "",
+                base_url=gate_base_url,
+                fee_rate=0.0004,
+                slippage=0.0002,
+            )
+
+            def _save_order(order_dict: Dict[str, Any]) -> None:
+                try:
+                    order_dict["execution_mode"] = exec_mode.value
+                    self._storage.save_reasoning_audit(
+                        plan_id=order_dict.get("plan_id", 0),
+                        llm_provider="execution_engine",
+                        memory_usage_score=0.0,
+                        ml_used=False,
+                        procedural_used=False,
+                        episodic_used=False,
+                        shadow_used=False,
+                        portfolio_used=True,
+                        risk_used=False,
+                        treasury_used=False,
+                        reasoning_json=str(order_dict),
+                        context_size_chars=0,
+                        latency_ms=order_dict.get("latency_ms", 0),
+                        raw_content_length=0,
+                    )
+                except Exception:
+                    log.exception("Order storage failed (non-fatal)")
+
+            self._execution_engine = ExecutionEngine(
+                executor=executor,
+                mode=exec_mode,
+                storage_callback=_save_order,
+                risk_callback=None,
+                max_retries=3,
+                rate_limit_per_second=5.0,
+            )
+            log.info("ExecutionEngine initialized: mode=%s", exec_mode.value)
+        except Exception as ee:
+            log.warning("ExecutionEngine init failed (non-fatal): %s", ee)
+            self._execution_engine = None
+
         # Phase 9.3 — Reasoning Feedback Engine (self-reflection loop)
         self._reasoning_feedback = ReasoningFeedbackEngine(storage=self._storage)
         self._cached_feedback_prompt: Optional[str] = None
@@ -500,7 +555,11 @@ class AutonomousAgent:
                     continue
 
                 log.warning("EXECUTING action: %s params=%s", action.type, action.params)
-                result = execute_action(action.type.value, action.params)
+                result = execute_action(
+                    action.type.value,
+                    action.params,
+                    executor=self._execution_engine,
+                )
                 success = bool(result.get("success", False))
 
                 # Record rate limit untuk order actions

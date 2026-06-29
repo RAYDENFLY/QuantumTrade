@@ -1909,6 +1909,108 @@ def api_agent_patterns_audit() -> Dict[str, Any]:
         return {"error": str(e), "integrity_status": "unknown"}
 
 
+@app.get("/api/agent/testnet")
+def api_agent_testnet() -> Dict[str, Any]:
+    """Return Testnet trading dashboard data — balance, positions, orders, execution metrics.
+
+    Response:
+      {
+        "execution_mode": "TESTNET",
+        "connected": bool,
+        "balance": {"total": float, "available": float, "margin": float},
+        "positions": [{"contract": str, "side": str, "size": float, "entry": float, "pnl": float}],
+        "orders": [{"order_id": str, "contract": str, "side": str, "size": float, "status": str}],
+        "metrics": {"orders_sent": int, "orders_filled": int, "orders_failed": int,
+                     "avg_latency_ms": float, "avg_slippage": float},
+        "health": {"exchange": "ok"|"error", "auth": "ok"|"error", "latency_ms": float}
+      }
+    """
+    result: Dict[str, Any] = {
+        "execution_mode": "UNKNOWN",
+        "connected": False,
+        "balance": {"total": 0.0, "available": 0.0, "margin": 0.0},
+        "positions": [],
+        "orders": [],
+        "metrics": {},
+        "health": {"exchange": "unknown", "auth": "unknown", "latency_ms": 0},
+    }
+    try:
+        import time, os
+        from quant_system.execution.gate_executor import GateExecutor
+        from quant_system.execution.execution_engine import ExecutionEngine, ExecutionMode
+
+        cfg = _load_config()
+        gate_base = str(cfg.get("gate", {}).get("base_url", "https://api-testnet.gateapi.io/api/v4"))
+        gate_key = str(os.environ.get("GATE_API_KEY", ""))
+        gate_secret = str(os.environ.get("GATE_API_SECRET", ""))
+
+        executor = GateExecutor(
+            api_key=gate_key,
+            api_secret=gate_secret,
+            base_url=gate_base,
+            fee_rate=0.0004,
+            slippage=0.0002,
+        )
+
+        engine = ExecutionEngine(
+            executor=executor,
+            mode=ExecutionMode.TESTNET,
+            max_retries=1,
+            rate_limit_per_second=5.0,
+        )
+
+        start = time.time()
+        try:
+            equity = executor.get_account_equity()
+            result["balance"]["total"] = equity
+            result["health"]["exchange"] = "ok"
+            result["health"]["auth"] = "ok"
+            result["connected"] = True
+        except Exception as e:
+            result["health"]["exchange"] = "error"
+            result["health"]["auth"] = str(e)
+
+        result["health"]["latency_ms"] = round((time.time() - start) * 1000, 1)
+
+        try:
+            positions = executor.get_open_positions()
+            result["positions"] = [
+                {"contract": p.get("contract"), "side": "LONG" if float(p.get("size", 0) or 0) > 0 else "SHORT",
+                 "size": abs(float(p.get("size", 0) or 0)), "entry": float(p.get("entry_price", 0) or 0),
+                 "pnl": float(p.get("unrealised_pnl", p.get("unrealized_pnl", 0)) or 0)}
+                for p in positions if float(p.get("size", 0) or 0) != 0
+            ]
+        except Exception:
+            pass
+
+        try:
+            orders = executor.get_open_trigger_orders()
+            result["orders"] = [
+                {"order_id": o.get("id"), "contract": o.get("contract"), "side": o.get("side"),
+                 "size": abs(float(o.get("size", 0) or 0)), "trigger_price": o.get("trigger", {}).get("price"),
+                 "status": "open"}
+                for o in (orders if isinstance(orders, list) else [])
+            ]
+        except Exception:
+            pass
+
+        try:
+            audit = _get_agent_storage().get_reasoning_audit_summary() if hasattr(_get_agent_storage(), 'get_reasoning_audit_summary') else {}
+            result["metrics"] = {
+                "orders_sent": audit.get("total_audits", 0),
+                "avg_latency_ms": audit.get("avg_latency_ms", 0),
+            }
+        except Exception:
+            pass
+
+        result["execution_mode"] = "TESTNET"
+
+    except Exception as e:
+        result["health"]["exchange"] = f"init_error: {e}"
+
+    return result
+
+
 # Update API docs summary to include agent endpoints
 @app.get("/api/docs/summary")
 def api_docs_summary_v2() -> Dict[str, Any]:
