@@ -80,29 +80,14 @@ class AgentStorage(ABC):
     def get_validated_patterns(self, limit: int = 50) -> List[Dict[str, Any]]: ...
     # Memory advice / sandbox (Phase 7D.0)
     @abstractmethod
-    def save_memory_advice(
-        self,
-        ts: datetime,
-        plan_id: int,
-        planner_decision: str,
-        memory_decision: str,
-        difference_detected: bool,
-        confidence: float,
-        reason_json: str,
-    ) -> int: ...
+    def save_memory_advice(self, ts: datetime, plan_id: int, planner_decision: str, memory_decision: str, difference_detected: bool, confidence: float, reason_json: str) -> int: ...
     @abstractmethod
     def get_recent_memory_advice(self, limit: int = 20) -> List[Dict[str, Any]]: ...
     @abstractmethod
     def get_memory_advice_stats(self) -> Dict[str, Any]: ...
     # Memory injections / procedural context (Phase 7D.1)
     @abstractmethod
-    def save_memory_injection(
-        self,
-        ts: datetime,
-        plan_id: int,
-        rule_count: int,
-        rules_json: str,
-    ) -> int: ...
+    def save_memory_injection(self, ts: datetime, plan_id: int, rule_count: int, rules_json: str) -> int: ...
     @abstractmethod
     def get_recent_memory_injections(self, limit: int = 20) -> List[Dict[str, Any]]: ...
     @abstractmethod
@@ -130,13 +115,50 @@ class AgentStorage(ABC):
 
     @abstractmethod
     def get_reasoning_audits(self, limit: int = 20) -> List[Dict[str, Any]]: ...
-
     @abstractmethod
     def get_reasoning_audit_summary(self) -> Dict[str, Any]: ...
 
     # Phase 9.3 — Reasoning feedback
     @abstractmethod
     def save_reasoning_feedback(self, plan_id: int, reflection: str, missing_dimensions: str, recommended_improvements: str, severity: str = "info") -> None: ...
+
+    # Phase 10.5 — Trade Replay
+    @abstractmethod
+    def save_trade_replay_event(
+        self,
+        trade_id: str,
+        event_type: str,
+        event_data: str,
+        event_index: int,
+        timestamp: str = "",
+        status: str = "",
+        duration_ms: float = 0.0,
+        provider: str = "",
+        confidence: float = 0.0,
+        latency_ms: float = 0.0,
+        plan_id: int = 0,
+    ) -> None: ...
+
+    @abstractmethod
+    def save_trade_replay_summary(
+        self,
+        trade_id: str,
+        contract: str,
+        side: str,
+        plan_id: int,
+        llm_provider: str,
+        status: str,
+        total_duration_ms: float,
+        event_count: int,
+        created_at: str,
+    ) -> None: ...
+
+    @abstractmethod
+    def get_trade_replay_events(self, trade_id: str) -> List[Dict[str, Any]]: ...
+
+    @abstractmethod
+    def get_trade_replay_summary(self, limit: int = 50) -> List[Dict[str, Any]]: ...
+
 # ===================== PG Schema =====================
 PG_SCHEMA = """
 CREATE TABLE IF NOT EXISTS agent_plans (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL, input_snapshot JSONB, plan_json JSONB, approved_by TEXT DEFAULT 'auto', executed_at TIMESTAMPTZ, status TEXT DEFAULT 'pending');
@@ -167,118 +189,148 @@ CREATE INDEX IF NOT EXISTS idx_agent_episodes_resolved ON agent_episodes(resolve
 CREATE TABLE IF NOT EXISTS semantic_patterns (id SERIAL PRIMARY KEY, pattern_key TEXT NOT NULL UNIQUE, action_type TEXT NOT NULL, condition_json JSONB NOT NULL DEFAULT '{}', sample_size INTEGER NOT NULL DEFAULT 0, positive_count INTEGER NOT NULL DEFAULT 0, negative_count INTEGER NOT NULL DEFAULT 0, neutral_count INTEGER NOT NULL DEFAULT 0, success_rate DOUBLE PRECISION NOT NULL DEFAULT 0.0, confidence_score DOUBLE PRECISION NOT NULL DEFAULT 0.0, first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(), last_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(), active BOOLEAN NOT NULL DEFAULT TRUE, last_episode_id_processed INTEGER NOT NULL DEFAULT 0, validated BOOLEAN NOT NULL DEFAULT FALSE, validation_score DOUBLE PRECISION NOT NULL DEFAULT 0.0, last_validated_at TIMESTAMPTZ);
 CREATE INDEX IF NOT EXISTS idx_semantic_patterns_key ON semantic_patterns(pattern_key);
 CREATE INDEX IF NOT EXISTS idx_semantic_patterns_active ON semantic_patterns(active);
-
-CREATE TABLE IF NOT EXISTS memory_advice (
-    id               SERIAL PRIMARY KEY,
-    ts               TIMESTAMPTZ NOT NULL,
-    plan_id          INTEGER REFERENCES agent_plans(id),
-    planner_decision TEXT NOT NULL,
-    memory_decision  TEXT NOT NULL,
-    difference_detected BOOLEAN NOT NULL DEFAULT FALSE,
-    confidence       DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    reason_json      JSONB NOT NULL DEFAULT '{}'
-);
+CREATE TABLE IF NOT EXISTS memory_advice (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), planner_decision TEXT NOT NULL, memory_decision TEXT NOT NULL, difference_detected BOOLEAN NOT NULL DEFAULT FALSE, confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0, reason_json JSONB NOT NULL DEFAULT '{}');
 CREATE INDEX IF NOT EXISTS idx_memory_advice_ts ON memory_advice(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_advice_diff ON memory_advice(difference_detected);
-
-CREATE TABLE IF NOT EXISTS memory_injections (
-    id               SERIAL PRIMARY KEY,
-    ts               TIMESTAMPTZ NOT NULL,
-    plan_id          INTEGER REFERENCES agent_plans(id),
-    rule_count       INTEGER NOT NULL DEFAULT 0,
-    rules_json       JSONB NOT NULL DEFAULT '[]',
-    planner_used_memory BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TABLE IF NOT EXISTS memory_injections (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), rule_count INTEGER NOT NULL DEFAULT 0, rules_json JSONB NOT NULL DEFAULT '[]', planner_used_memory BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_memory_injections_ts ON memory_injections(ts DESC);
-
-CREATE TABLE IF NOT EXISTS memory_attributions (
-    id               SERIAL PRIMARY KEY,
-    ts               TIMESTAMPTZ NOT NULL,
-    plan_id          INTEGER REFERENCES agent_plans(id),
-    episode_id       INTEGER REFERENCES agent_episodes(id),
-    memory_rules_count INTEGER NOT NULL DEFAULT 0,
-    memory_confidence   DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    planner_decision    TEXT NOT NULL,
-    analyst_consensus   TEXT NOT NULL DEFAULT 'unknown',
-    debate_verdict      TEXT NOT NULL DEFAULT 'unknown',
-    survival_mode       TEXT NOT NULL DEFAULT 'NORMAL',
-    outcome_quality     TEXT NOT NULL DEFAULT 'unknown',
-    survival_score_delta DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    equity_delta_pct    DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    memory_contribution_score DOUBLE PRECISION NOT NULL DEFAULT 0.0,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TABLE IF NOT EXISTS memory_attributions (id SERIAL PRIMARY KEY, ts TIMESTAMPTZ NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), episode_id INTEGER REFERENCES agent_episodes(id), memory_rules_count INTEGER NOT NULL DEFAULT 0, memory_confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0, planner_decision TEXT NOT NULL, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', survival_mode TEXT NOT NULL DEFAULT 'NORMAL', outcome_quality TEXT NOT NULL DEFAULT 'unknown', survival_score_delta DOUBLE PRECISION NOT NULL DEFAULT 0.0, equity_delta_pct DOUBLE PRECISION NOT NULL DEFAULT 0.0, memory_contribution_score DOUBLE PRECISION NOT NULL DEFAULT 0.0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_memory_attributions_ts ON memory_attributions(ts DESC);
 CREATE INDEX IF NOT EXISTS idx_memory_attributions_pending ON memory_attributions(episode_id) WHERE outcome_quality='pending';
-
--- Phase 9.0 — Order execution table (testnet/prod)
-CREATE TABLE IF NOT EXISTS agent_orders (
-    id SERIAL PRIMARY KEY,
-    order_id TEXT NOT NULL UNIQUE,
-    exchange_order_id TEXT,
-    contract TEXT NOT NULL,
-    side TEXT NOT NULL,
-    size DOUBLE PRECISION NOT NULL DEFAULT 0,
-    order_type TEXT NOT NULL DEFAULT 'MARKET',
-    price DOUBLE PRECISION,
-    stop_price DOUBLE PRECISION,
-    tp_price DOUBLE PRECISION,
-    sl_price DOUBLE PRECISION,
-    reduce_only BOOLEAN NOT NULL DEFAULT FALSE,
-    status TEXT NOT NULL DEFAULT 'PENDING',
-    filled_size DOUBLE PRECISION NOT NULL DEFAULT 0,
-    avg_fill_price DOUBLE PRECISION,
-    fees DOUBLE PRECISION NOT NULL DEFAULT 0,
-    slippage DOUBLE PRECISION NOT NULL DEFAULT 0,
-    latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
-    error TEXT,
-    execution_mode TEXT NOT NULL DEFAULT 'TESTNET',
-    plan_id INTEGER REFERENCES agent_plans(id),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    opened_at TIMESTAMPTZ,
-    closed_at TIMESTAMPTZ,
-    realized_pnl DOUBLE PRECISION
-);
+CREATE TABLE IF NOT EXISTS agent_orders (id SERIAL PRIMARY KEY, order_id TEXT NOT NULL UNIQUE, exchange_order_id TEXT, contract TEXT NOT NULL, side TEXT NOT NULL, size DOUBLE PRECISION NOT NULL DEFAULT 0, order_type TEXT NOT NULL DEFAULT 'MARKET', price DOUBLE PRECISION, stop_price DOUBLE PRECISION, tp_price DOUBLE PRECISION, sl_price DOUBLE PRECISION, reduce_only BOOLEAN NOT NULL DEFAULT FALSE, status TEXT NOT NULL DEFAULT 'PENDING', filled_size DOUBLE PRECISION NOT NULL DEFAULT 0, avg_fill_price DOUBLE PRECISION, fees DOUBLE PRECISION NOT NULL DEFAULT 0, slippage DOUBLE PRECISION NOT NULL DEFAULT 0, latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0, error TEXT, execution_mode TEXT NOT NULL DEFAULT 'TESTNET', plan_id INTEGER REFERENCES agent_plans(id), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), opened_at TIMESTAMPTZ, closed_at TIMESTAMPTZ, realized_pnl DOUBLE PRECISION);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_order_id ON agent_orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_contract ON agent_orders(contract);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_status ON agent_orders(status);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_created ON agent_orders(created_at DESC);
-
--- Phase 9.2 — LLM Reasoning Audit
-CREATE TABLE IF NOT EXISTS agent_reasoning_audit (
-    id SERIAL PRIMARY KEY,
-    plan_id INTEGER REFERENCES agent_plans(id),
-    llm_provider TEXT NOT NULL DEFAULT 'unknown',
-    memory_usage_score DOUBLE PRECISION NOT NULL DEFAULT 0,
-    ml_used BOOLEAN NOT NULL DEFAULT FALSE,
-    procedural_used BOOLEAN NOT NULL DEFAULT FALSE,
-    episodic_used BOOLEAN NOT NULL DEFAULT FALSE,
-    shadow_used BOOLEAN NOT NULL DEFAULT FALSE,
-    portfolio_used BOOLEAN NOT NULL DEFAULT FALSE,
-    risk_used BOOLEAN NOT NULL DEFAULT FALSE,
-    treasury_used BOOLEAN NOT NULL DEFAULT FALSE,
-    reasoning_json JSONB NOT NULL DEFAULT '{}',
-    context_size_chars INTEGER NOT NULL DEFAULT 0,
-    latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
-    raw_content_length INTEGER NOT NULL DEFAULT 0,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TABLE IF NOT EXISTS agent_reasoning_audit (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES agent_plans(id), llm_provider TEXT NOT NULL DEFAULT 'unknown', memory_usage_score DOUBLE PRECISION NOT NULL DEFAULT 0, ml_used BOOLEAN NOT NULL DEFAULT FALSE, procedural_used BOOLEAN NOT NULL DEFAULT FALSE, episodic_used BOOLEAN NOT NULL DEFAULT FALSE, shadow_used BOOLEAN NOT NULL DEFAULT FALSE, portfolio_used BOOLEAN NOT NULL DEFAULT FALSE, risk_used BOOLEAN NOT NULL DEFAULT FALSE, treasury_used BOOLEAN NOT NULL DEFAULT FALSE, reasoning_json JSONB NOT NULL DEFAULT '{}', context_size_chars INTEGER NOT NULL DEFAULT 0, latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0, raw_content_length INTEGER NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_reasoning_audit_plan ON agent_reasoning_audit(plan_id);
 CREATE INDEX IF NOT EXISTS idx_reasoning_audit_created ON agent_reasoning_audit(created_at DESC);
-
-CREATE TABLE IF NOT EXISTS agent_reasoning_feedback (
-    id SERIAL PRIMARY KEY,
-    plan_id INTEGER REFERENCES agent_plans(id),
-    reflection TEXT NOT NULL DEFAULT '',
-    missing_dimensions JSONB NOT NULL DEFAULT '[]',
-    recommended_improvements JSONB NOT NULL DEFAULT '[]',
-    severity TEXT NOT NULL DEFAULT 'info',
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+CREATE TABLE IF NOT EXISTS agent_reasoning_feedback (id SERIAL PRIMARY KEY, plan_id INTEGER REFERENCES agent_plans(id), reflection TEXT NOT NULL DEFAULT '', missing_dimensions JSONB NOT NULL DEFAULT '[]', recommended_improvements JSONB NOT NULL DEFAULT '[]', severity TEXT NOT NULL DEFAULT 'info', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_plan ON agent_reasoning_feedback(plan_id);
 CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_created ON agent_reasoning_feedback(created_at DESC);
+
+-- Phase 10.5 — Trade Replay events
+CREATE TABLE IF NOT EXISTS agent_trade_replay_events (
+    id SERIAL PRIMARY KEY,
+    trade_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data JSONB NOT NULL DEFAULT '{}',
+    event_index INTEGER NOT NULL DEFAULT 0,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL DEFAULT '',
+    duration_ms DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    provider TEXT NOT NULL DEFAULT '',
+    confidence DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    plan_id INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_events_trade ON agent_trade_replay_events(trade_id);
+CREATE INDEX IF NOT EXISTS idx_replay_events_type ON agent_trade_replay_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_replay_events_idx ON agent_trade_replay_events(trade_id, event_index);
+
+-- Phase 10.5 — Trade Replay summary
+CREATE TABLE IF NOT EXISTS agent_trade_replay_summary (
+    id SERIAL PRIMARY KEY,
+    trade_id TEXT NOT NULL UNIQUE,
+    contract TEXT NOT NULL DEFAULT '',
+    side TEXT NOT NULL DEFAULT '',
+    plan_id INTEGER NOT NULL DEFAULT 0,
+    llm_provider TEXT NOT NULL DEFAULT 'unknown',
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    total_duration_ms DOUBLE PRECISION NOT NULL DEFAULT 0.0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_trade ON agent_trade_replay_summary(trade_id);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_status ON agent_trade_replay_summary(status);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_created ON agent_trade_replay_summary(created_at DESC);
 """
+
+# ===================== SQLite Schema =====================
+SQLITE_SCHEMA = """
+CREATE TABLE IF NOT EXISTS agent_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, input_snapshot TEXT, plan_json TEXT, approved_by TEXT DEFAULT 'auto', executed_at TEXT, status TEXT DEFAULT 'pending');
+CREATE TABLE IF NOT EXISTS agent_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, action_type TEXT NOT NULL, action_params TEXT, result_json TEXT, success INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS agent_treasury (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, treasury_usdt REAL NOT NULL, cost_per_day_usd REAL NOT NULL, llm_cost_usd REAL NOT NULL DEFAULT 0, survival_mode TEXT NOT NULL DEFAULT 'NORMAL');
+CREATE TABLE IF NOT EXISTS shadow_observations (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, recommended_action TEXT NOT NULL, recommended_params TEXT NOT NULL DEFAULT '{}', contract TEXT, survival_mode TEXT NOT NULL, system_action TEXT, position_size_before REAL, position_size_after REAL, tpsl_changed INTEGER DEFAULT 0, entries_paused INTEGER DEFAULT 0, agreement TEXT NOT NULL DEFAULT 'UNKNOWN', status TEXT NOT NULL DEFAULT 'PENDING_24H', resolved_at TEXT, equity_at_obs REAL, drawdown_at_obs REAL, equity_24h_after REAL, asset_return_24h REAL, equity_change_24h REAL, counterfactual_pnl REAL);
+CREATE INDEX IF NOT EXISTS idx_shadow_obs_ts ON shadow_observations(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_shadow_obs_plan ON shadow_observations(plan_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_obs_agreement ON shadow_observations(agreement);
+CREATE INDEX IF NOT EXISTS idx_shadow_obs_status ON shadow_observations(status);
+CREATE TABLE IF NOT EXISTS analyst_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, reports_json TEXT NOT NULL, consensus TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0, breakdown_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_analyst_reports_ts ON analyst_reports(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_analyst_reports_plan ON analyst_reports(plan_id);
+CREATE TABLE IF NOT EXISTS bullbear_debates (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, bull_json TEXT NOT NULL, bear_json TEXT NOT NULL, verdict_json TEXT NOT NULL, bull_confidence REAL NOT NULL DEFAULT 0.0, bear_confidence REAL NOT NULL DEFAULT 0.0, net_bias TEXT NOT NULL DEFAULT 'neutral', final_verdict TEXT NOT NULL DEFAULT 'neutral', final_conviction REAL NOT NULL DEFAULT 0.0, override_flag INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_bullbear_ts ON bullbear_debates(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_bullbear_plan ON bullbear_debates(plan_id);
+CREATE TABLE IF NOT EXISTS experiment_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL DEFAULT 'RUNNING', initial_capital REAL NOT NULL, current_capital REAL NOT NULL DEFAULT 0.0, peak_capital REAL NOT NULL DEFAULT 0.0, max_drawdown REAL NOT NULL DEFAULT 0.0, days_alive REAL NOT NULL DEFAULT 0.0, survival_score REAL NOT NULL DEFAULT 0.0, total_return_pct REAL NOT NULL DEFAULT 0.0, highest_runway_days REAL NOT NULL DEFAULT 0.0, lowest_runway_days REAL NOT NULL DEFAULT 0.0, best_survival_score REAL NOT NULL DEFAULT 0.0, worst_survival_score REAL NOT NULL DEFAULT 0.0, runway_days REAL NOT NULL DEFAULT 0.0, plans_generated INTEGER NOT NULL DEFAULT 0, debates_generated INTEGER NOT NULL DEFAULT 0, analyst_reports_generated INTEGER NOT NULL DEFAULT 0, shadow_observations INTEGER NOT NULL DEFAULT 0, agreement_rate REAL NOT NULL DEFAULT 0.0, notes TEXT NOT NULL DEFAULT '');
+CREATE INDEX IF NOT EXISTS idx_experiment_status ON experiment_runs(status);
+CREATE TABLE IF NOT EXISTS agent_episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), action_type TEXT NOT NULL, survival_mode TEXT NOT NULL, treasury_usdt REAL NOT NULL DEFAULT 0.0, survival_score REAL NOT NULL DEFAULT 0.0, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', snapshot_json TEXT NOT NULL DEFAULT '{}', outcome_json TEXT NOT NULL DEFAULT '{}', importance_score REAL NOT NULL DEFAULT 0.5, resolved INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_agent_episodes_ts ON agent_episodes(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_agent_episodes_action ON agent_episodes(action_type);
+CREATE INDEX IF NOT EXISTS idx_agent_episodes_mode ON agent_episodes(survival_mode);
+CREATE INDEX IF NOT EXISTS idx_agent_episodes_resolved ON agent_episodes(resolved);
+CREATE TABLE IF NOT EXISTS semantic_patterns (id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_key TEXT NOT NULL UNIQUE, action_type TEXT NOT NULL, condition_json TEXT NOT NULL DEFAULT '{}', sample_size INTEGER NOT NULL DEFAULT 0, positive_count INTEGER NOT NULL DEFAULT 0, negative_count INTEGER NOT NULL DEFAULT 0, neutral_count INTEGER NOT NULL DEFAULT 0, success_rate REAL NOT NULL DEFAULT 0.0, confidence_score REAL NOT NULL DEFAULT 0.0, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, last_episode_id_processed INTEGER NOT NULL DEFAULT 0, validated INTEGER NOT NULL DEFAULT 0, validation_score REAL NOT NULL DEFAULT 0.0, last_validated_at TEXT);
+CREATE INDEX IF NOT EXISTS idx_semantic_patterns_key ON semantic_patterns(pattern_key);
+CREATE INDEX IF NOT EXISTS idx_semantic_patterns_active ON semantic_patterns(active);
+CREATE TABLE IF NOT EXISTS memory_advice (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), planner_decision TEXT NOT NULL, memory_decision TEXT NOT NULL, difference_detected INTEGER NOT NULL DEFAULT 0, confidence REAL NOT NULL DEFAULT 0.0, reason_json TEXT NOT NULL DEFAULT '{}');
+CREATE INDEX IF NOT EXISTS idx_memory_advice_ts ON memory_advice(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_memory_advice_diff ON memory_advice(difference_detected);
+CREATE TABLE IF NOT EXISTS memory_injections (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), rule_count INTEGER NOT NULL DEFAULT 0, rules_json TEXT NOT NULL DEFAULT '[]', planner_used_memory INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_memory_injections_ts ON memory_injections(ts DESC);
+CREATE TABLE IF NOT EXISTS memory_attributions (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), episode_id INTEGER REFERENCES agent_episodes(id), memory_rules_count INTEGER NOT NULL DEFAULT 0, memory_confidence REAL NOT NULL DEFAULT 0.0, planner_decision TEXT NOT NULL, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', survival_mode TEXT NOT NULL DEFAULT 'NORMAL', outcome_quality TEXT NOT NULL DEFAULT 'unknown', survival_score_delta REAL NOT NULL DEFAULT 0.0, equity_delta_pct REAL NOT NULL DEFAULT 0.0, memory_contribution_score REAL NOT NULL DEFAULT 0.0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_memory_attributions_ts ON memory_attributions(ts DESC);
+CREATE TABLE IF NOT EXISTS shadow_memory_influence (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), planner_action TEXT NOT NULL, planner_confidence REAL NOT NULL DEFAULT 0.0, memory_action TEXT NOT NULL, memory_confidence REAL NOT NULL DEFAULT 0.0, agreement TEXT NOT NULL DEFAULT 'UNKNOWN', influence_weight REAL NOT NULL DEFAULT 0.0, shadow_influence_score REAL NOT NULL DEFAULT 0.0, pattern_ids_json TEXT NOT NULL DEFAULT '[]', validation_scores_json TEXT NOT NULL DEFAULT '[]', survival_mode TEXT NOT NULL DEFAULT 'NORMAL', analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_ts ON shadow_memory_influence(ts DESC);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_agreement ON shadow_memory_influence(agreement);
+CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_plan ON shadow_memory_influence(plan_id);
+CREATE TABLE IF NOT EXISTS agent_reasoning_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), llm_provider TEXT NOT NULL DEFAULT 'unknown', memory_usage_score REAL NOT NULL DEFAULT 0, ml_used INTEGER NOT NULL DEFAULT 0, procedural_used INTEGER NOT NULL DEFAULT 0, episodic_used INTEGER NOT NULL DEFAULT 0, shadow_used INTEGER NOT NULL DEFAULT 0, portfolio_used INTEGER NOT NULL DEFAULT 0, risk_used INTEGER NOT NULL DEFAULT 0, treasury_used INTEGER NOT NULL DEFAULT 0, reasoning_json TEXT NOT NULL DEFAULT '{}', context_size_chars INTEGER NOT NULL DEFAULT 0, latency_ms REAL NOT NULL DEFAULT 0, raw_content_length INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_reasoning_audit_plan ON agent_reasoning_audit(plan_id);
+CREATE INDEX IF NOT EXISTS idx_reasoning_audit_created ON agent_reasoning_audit(created_at DESC);
+CREATE TABLE IF NOT EXISTS agent_reasoning_feedback (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), reflection TEXT NOT NULL DEFAULT '', missing_dimensions TEXT NOT NULL DEFAULT '[]', recommended_improvements TEXT NOT NULL DEFAULT '[]', severity TEXT NOT NULL DEFAULT 'info', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_plan ON agent_reasoning_feedback(plan_id);
+CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_created ON agent_reasoning_feedback(created_at DESC);
+
+-- Phase 10.5 — Trade Replay events
+CREATE TABLE IF NOT EXISTS agent_trade_replay_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL DEFAULT '{}',
+    event_index INTEGER NOT NULL DEFAULT 0,
+    timestamp TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT '',
+    duration_ms REAL NOT NULL DEFAULT 0.0,
+    provider TEXT NOT NULL DEFAULT '',
+    confidence REAL NOT NULL DEFAULT 0.0,
+    latency_ms REAL NOT NULL DEFAULT 0.0,
+    plan_id INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_replay_events_trade ON agent_trade_replay_events(trade_id);
+CREATE INDEX IF NOT EXISTS idx_replay_events_type ON agent_trade_replay_events(event_type);
+CREATE INDEX IF NOT EXISTS idx_replay_events_idx ON agent_trade_replay_events(trade_id, event_index);
+
+-- Phase 10.5 — Trade Replay summary
+CREATE TABLE IF NOT EXISTS agent_trade_replay_summary (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    trade_id TEXT NOT NULL UNIQUE,
+    contract TEXT NOT NULL DEFAULT '',
+    side TEXT NOT NULL DEFAULT '',
+    plan_id INTEGER NOT NULL DEFAULT 0,
+    llm_provider TEXT NOT NULL DEFAULT 'unknown',
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    total_duration_ms REAL NOT NULL DEFAULT 0.0,
+    event_count INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_trade ON agent_trade_replay_summary(trade_id);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_status ON agent_trade_replay_summary(status);
+CREATE INDEX IF NOT EXISTS idx_replay_summary_created ON agent_trade_replay_summary(created_at DESC);
+"""
+
 # ===================== PostgreSQL =====================
 class PostgresAgentStorage(AgentStorage):
     def __init__(self, dsn: str) -> None:
@@ -445,7 +497,6 @@ class PostgresAgentStorage(AgentStorage):
     def resolve_episode(self, episode_id, outcome_json) -> None:
         with self._get_conn().cursor() as cur:
             cur.execute("UPDATE agent_episodes SET outcome_json=%s, resolved=%s WHERE id=%s", (outcome_json, True, episode_id))
-    # ---- Patterns (Phase 7C) ----
     def save_pattern(self, pattern_key, action_type, condition_json, sample_size, positive_count, negative_count, neutral_count, success_rate, confidence_score, last_episode_id_processed=0) -> int:
         with self._get_conn().cursor() as cur:
             cur.execute("""INSERT INTO semantic_patterns (pattern_key, action_type, condition_json, sample_size, positive_count, negative_count, neutral_count, success_rate, confidence_score, last_seen, last_episode_id_processed) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW(),%s) ON CONFLICT (pattern_key) DO UPDATE SET sample_size=EXCLUDED.sample_size, positive_count=EXCLUDED.positive_count, negative_count=EXCLUDED.negative_count, neutral_count=EXCLUDED.neutral_count, success_rate=EXCLUDED.success_rate, confidence_score=EXCLUDED.confidence_score, last_seen=NOW(), active=TRUE, last_episode_id_processed=EXCLUDED.last_episode_id_processed RETURNING id""",
@@ -468,13 +519,10 @@ class PostgresAgentStorage(AgentStorage):
                 cols = [desc[0] for desc in cur.description]
             return dict(zip(cols, row))
         except Exception: return None
-    # ---- Pattern validation (Phase 7C.2) ----
     def validate_pattern(self, pattern_key: str, validated: bool, validation_score: float) -> None:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "UPDATE semantic_patterns SET validated=%s, validation_score=%s, last_validated_at=NOW(), active=%s WHERE pattern_key=%s",
-                (validated, validation_score, validated, pattern_key),
-            )
+            cur.execute("UPDATE semantic_patterns SET validated=%s, validation_score=%s, last_validated_at=NOW(), active=%s WHERE pattern_key=%s",
+                        (validated, validation_score, validated, pattern_key))
     def get_validated_patterns(self, limit=50) -> List[Dict[str, Any]]:
         try:
             with self._get_conn().cursor() as cur:
@@ -483,13 +531,10 @@ class PostgresAgentStorage(AgentStorage):
             return [dict(zip(cols, r)) for r in rows]
         except Exception:
             log.exception("get_validated_patterns failed"); return []
-    # ---- Memory Advice / Sandbox (Phase 7D.0) ----
     def save_memory_advice(self, ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) -> int:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "INSERT INTO memory_advice (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json),
-            )
+            cur.execute("INSERT INTO memory_advice (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                        (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json))
             return int(cur.fetchone()[0])
     def get_recent_memory_advice(self, limit=20) -> List[Dict[str, Any]]:
         try:
@@ -507,23 +552,13 @@ class PostgresAgentStorage(AgentStorage):
                 total = int(row[0]) if row else 0
                 diffs = int(row[1]) if row else 0
                 avg_conf = float(row[2]) if row and row[2] is not None else 0.0
-            return {
-                "advice_count": total,
-                "agreement_count": total - diffs,
-                "disagreement_count": diffs,
-                "agreement_rate": round((total - diffs) / max(1, total), 4),
-                "disagreement_rate": round(diffs / max(1, total), 4),
-                "avg_confidence": round(avg_conf, 4),
-            }
+            return {"advice_count": total, "agreement_count": total - diffs, "disagreement_count": diffs, "agreement_rate": round((total - diffs) / max(1, total), 4), "disagreement_rate": round(diffs / max(1, total), 4), "avg_confidence": round(avg_conf, 4)}
         except Exception:
             return {"advice_count": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_confidence": 0.0}
-    # ---- Memory Injections / Procedural Context (Phase 7D.1) ----
     def save_memory_injection(self, ts, plan_id, rule_count, rules_json) -> int:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "INSERT INTO memory_injections (ts, plan_id, rule_count, rules_json, planner_used_memory, created_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-                (ts, plan_id, rule_count, rules_json, False, ts),
-            )
+            cur.execute("INSERT INTO memory_injections (ts, plan_id, rule_count, rules_json, planner_used_memory, created_at) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+                        (ts, plan_id, rule_count, rules_json, False, ts))
             return int(cur.fetchone()[0])
     def get_recent_memory_injections(self, limit=20) -> List[Dict[str, Any]]:
         try:
@@ -543,13 +578,10 @@ class PostgresAgentStorage(AgentStorage):
             return {"injection_count": total, "avg_rules_per_plan": round(avg_rules, 2), "validated_patterns_available": len(self.get_validated_patterns())}
         except Exception:
             return {"injection_count": 0, "avg_rules_per_plan": 0.0, "validated_patterns_available": 0}
-    # ---- Memory Attribution (Phase 7D.2) ----
     def save_attribution(self, ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> int:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "INSERT INTO memory_attributions (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, ts),
-            )
+            cur.execute("INSERT INTO memory_attributions (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, created_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                        (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, ts))
             return int(cur.fetchone()[0])
     def get_recent_attributions(self, limit=20) -> List[Dict[str, Any]]:
         try:
@@ -561,11 +593,8 @@ class PostgresAgentStorage(AgentStorage):
             log.exception("get_recent_attributions failed"); return []
     def update_attribution(self, episode_id, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> None:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "UPDATE memory_attributions SET outcome_quality=%s, survival_score_delta=%s, equity_delta_pct=%s, memory_contribution_score=%s WHERE episode_id=%s AND outcome_quality='pending'",
-                (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id),
-            )
-
+            cur.execute("UPDATE memory_attributions SET outcome_quality=%s, survival_score_delta=%s, equity_delta_pct=%s, memory_contribution_score=%s WHERE episode_id=%s AND outcome_quality='pending'",
+                        (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id))
     def get_attribution_metrics(self) -> Dict[str, Any]:
         try:
             with self._get_conn().cursor() as cur:
@@ -576,25 +605,13 @@ class PostgresAgentStorage(AgentStorage):
                 pos = int(row[2]) if row else 0
                 neg = int(row[3]) if row else 0
                 neu = int(row[4]) if row else 0
-            return {
-                "total_attributions": total,
-                "average_contribution_score": round(avg_contrib, 4),
-                "memory_success_count": pos,
-                "memory_failure_count": neg,
-                "memory_neutral_count": neu,
-                "memory_alignment_rate": round(pos / max(1, total), 4),
-                "memory_success_rate": round(pos / max(1, pos + neg), 4) if (pos + neg) > 0 else 0.0,
-            }
+            return {"total_attributions": total, "average_contribution_score": round(avg_contrib, 4), "memory_success_count": pos, "memory_failure_count": neg, "memory_neutral_count": neu, "memory_alignment_rate": round(pos / max(1, total), 4), "memory_success_rate": round(pos / max(1, pos + neg), 4) if (pos + neg) > 0 else 0.0}
         except Exception:
             return {"total_attributions": 0, "average_contribution_score": 0.0, "memory_alignment_rate": 0.0, "memory_success_rate": 0.0, "memory_failure_rate": 0.0}
-
-    # ---- Shadow Memory Influence (Phase 8.1) ----
     def save_shadow_memory_influence(self, ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) -> int:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-                (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict),
-            )
+            cur.execute("INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+                        (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict))
             return int(cur.fetchone()[0])
     def get_recent_shadow_memory_influence(self, limit=20) -> List[Dict[str, Any]]:
         try:
@@ -614,26 +631,13 @@ class PostgresAgentStorage(AgentStorage):
                 disagrees = int(row[2]) if row else 0
                 avg_shadow = float(row[3]) if row and row[3] is not None else 0.0
                 avg_mem_conf = float(row[4]) if row and row[4] is not None else 0.0
-            return {
-                "total_evaluations": total,
-                "agreement_count": agrees,
-                "disagreement_count": disagrees,
-                "agreement_rate": round(agrees / max(1, total), 4),
-                "disagreement_rate": round(disagrees / max(1, total), 4),
-                "avg_shadow_influence_score": round(avg_shadow, 4),
-                "avg_memory_confidence": round(avg_mem_conf, 4),
-            }
+            return {"total_evaluations": total, "agreement_count": agrees, "disagreement_count": disagrees, "agreement_rate": round(agrees / max(1, total), 4), "disagreement_rate": round(disagrees / max(1, total), 4), "avg_shadow_influence_score": round(avg_shadow, 4), "avg_memory_confidence": round(avg_mem_conf, 4)}
         except Exception:
             return {"total_evaluations": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_shadow_influence_score": 0.0, "avg_memory_confidence": 0.0}
-
-    # ---- Reasoning audit / feedback (Phase 9.2/9.3) ----
     def save_reasoning_audit(self, plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars=0, latency_ms=0.0, raw_content_length=0) -> None:
         with self._get_conn().cursor() as cur:
-            cur.execute(
-                "INSERT INTO agent_reasoning_audit (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-                (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length),
-            )
-
+            cur.execute("INSERT INTO agent_reasoning_audit (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                        (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length))
     def get_reasoning_audits(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._get_conn().cursor() as cur:
@@ -642,7 +646,6 @@ class PostgresAgentStorage(AgentStorage):
             return [dict(zip(cols, r)) for r in rows]
         except Exception:
             log.exception("get_reasoning_audits failed"); return []
-
     def get_reasoning_audit_summary(self) -> Dict[str, Any]:
         try:
             with self._get_conn().cursor() as cur:
@@ -653,112 +656,53 @@ class PostgresAgentStorage(AgentStorage):
             counts = [int(v or 0) for v in row[4:11]] if row else [0] * 7
             rates = {name: round(count / max(1, total), 4) for name, count in zip(names, counts)}
             most_ignored = min(rates, key=rates.get) if rates else "unknown"
-            return {
-                "total_audits": total,
-                "avg_memory_usage_score": round(float(row[1] or 0), 4),
-                "avg_context_size_chars": round(float(row[2] or 0), 1),
-                "avg_latency_ms": round(float(row[3] or 0), 1),
-                "most_ignored_dimension": most_ignored,
-                "dimension_usage_rates": rates,
-            }
+            return {"total_audits": total, "avg_memory_usage_score": round(float(row[1] or 0), 4), "avg_context_size_chars": round(float(row[2] or 0), 1), "avg_latency_ms": round(float(row[3] or 0), 1), "most_ignored_dimension": most_ignored, "dimension_usage_rates": rates}
         except Exception:
             log.exception("get_reasoning_audit_summary failed")
             return {"total_audits": 0, "avg_memory_usage_score": 0.0, "avg_context_size_chars": 0.0, "avg_latency_ms": 0.0, "most_ignored_dimension": "unknown", "dimension_usage_rates": {}}
-
     def save_reasoning_feedback(self, plan_id, reflection, missing_dimensions, recommended_improvements, severity="info") -> None:
         with self._get_conn().cursor() as cur:
+            cur.execute("INSERT INTO agent_reasoning_feedback (plan_id, reflection, missing_dimensions, recommended_improvements, severity) VALUES (%s,%s,%s,%s,%s)",
+                        (plan_id, reflection, missing_dimensions, recommended_improvements, severity))
+
+    # ── Phase 10.5 — Trade Replay ──
+    def save_trade_replay_event(self, trade_id, event_type, event_data, event_index, timestamp="", status="", duration_ms=0.0, provider="", confidence=0.0, latency_ms=0.0, plan_id=0) -> None:
+        with self._get_conn().cursor() as cur:
             cur.execute(
-                "INSERT INTO agent_reasoning_feedback (plan_id, reflection, missing_dimensions, recommended_improvements, severity) VALUES (%s,%s,%s,%s,%s)",
-                (plan_id, reflection, missing_dimensions, recommended_improvements, severity),
+                "INSERT INTO agent_trade_replay_events (trade_id, event_type, event_data, event_index, timestamp, status, duration_ms, provider, confidence, latency_ms, plan_id) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                (trade_id, event_type, event_data, event_index, timestamp, status, duration_ms, provider, confidence, latency_ms, plan_id),
             )
 
-# ===================== SQLite Schema =====================
-SQLITE_SCHEMA = """
-CREATE TABLE IF NOT EXISTS agent_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, input_snapshot TEXT, plan_json TEXT, approved_by TEXT DEFAULT 'auto', executed_at TEXT, status TEXT DEFAULT 'pending');
-CREATE TABLE IF NOT EXISTS agent_actions (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, action_type TEXT NOT NULL, action_params TEXT, result_json TEXT, success INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS agent_treasury (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, treasury_usdt REAL NOT NULL, cost_per_day_usd REAL NOT NULL, llm_cost_usd REAL NOT NULL DEFAULT 0, survival_mode TEXT NOT NULL DEFAULT 'NORMAL');
-CREATE TABLE IF NOT EXISTS shadow_observations (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, recommended_action TEXT NOT NULL, recommended_params TEXT NOT NULL DEFAULT '{}', contract TEXT, survival_mode TEXT NOT NULL, system_action TEXT, position_size_before REAL, position_size_after REAL, tpsl_changed INTEGER DEFAULT 0, entries_paused INTEGER DEFAULT 0, agreement TEXT NOT NULL DEFAULT 'UNKNOWN', status TEXT NOT NULL DEFAULT 'PENDING_24H', resolved_at TEXT, equity_at_obs REAL, drawdown_at_obs REAL, equity_24h_after REAL, asset_return_24h REAL, equity_change_24h REAL, counterfactual_pnl REAL);
-CREATE INDEX IF NOT EXISTS idx_shadow_obs_ts ON shadow_observations(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_shadow_obs_plan ON shadow_observations(plan_id);
-CREATE INDEX IF NOT EXISTS idx_shadow_obs_agreement ON shadow_observations(agreement);
-CREATE INDEX IF NOT EXISTS idx_shadow_obs_status ON shadow_observations(status);
-CREATE TABLE IF NOT EXISTS analyst_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, reports_json TEXT NOT NULL, consensus TEXT NOT NULL, confidence REAL NOT NULL DEFAULT 0.0, breakdown_json TEXT NOT NULL DEFAULT '{}');
-CREATE INDEX IF NOT EXISTS idx_analyst_reports_ts ON analyst_reports(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_analyst_reports_plan ON analyst_reports(plan_id);
-CREATE TABLE IF NOT EXISTS bullbear_debates (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER REFERENCES agent_plans(id), ts TEXT NOT NULL, bull_json TEXT NOT NULL, bear_json TEXT NOT NULL, verdict_json TEXT NOT NULL, bull_confidence REAL NOT NULL DEFAULT 0.0, bear_confidence REAL NOT NULL DEFAULT 0.0, net_bias TEXT NOT NULL DEFAULT 'neutral', final_verdict TEXT NOT NULL DEFAULT 'neutral', final_conviction REAL NOT NULL DEFAULT 0.0, override_flag INTEGER NOT NULL DEFAULT 0);
-CREATE INDEX IF NOT EXISTS idx_bullbear_ts ON bullbear_debates(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_bullbear_plan ON bullbear_debates(plan_id);
-CREATE TABLE IF NOT EXISTS experiment_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, started_at TEXT NOT NULL, ended_at TEXT, status TEXT NOT NULL DEFAULT 'RUNNING', initial_capital REAL NOT NULL, current_capital REAL NOT NULL DEFAULT 0.0, peak_capital REAL NOT NULL DEFAULT 0.0, max_drawdown REAL NOT NULL DEFAULT 0.0, days_alive REAL NOT NULL DEFAULT 0.0, survival_score REAL NOT NULL DEFAULT 0.0, total_return_pct REAL NOT NULL DEFAULT 0.0, highest_runway_days REAL NOT NULL DEFAULT 0.0, lowest_runway_days REAL NOT NULL DEFAULT 0.0, best_survival_score REAL NOT NULL DEFAULT 0.0, worst_survival_score REAL NOT NULL DEFAULT 0.0, runway_days REAL NOT NULL DEFAULT 0.0, plans_generated INTEGER NOT NULL DEFAULT 0, debates_generated INTEGER NOT NULL DEFAULT 0, analyst_reports_generated INTEGER NOT NULL DEFAULT 0, shadow_observations INTEGER NOT NULL DEFAULT 0, agreement_rate REAL NOT NULL DEFAULT 0.0, notes TEXT NOT NULL DEFAULT '');
-CREATE INDEX IF NOT EXISTS idx_experiment_status ON experiment_runs(status);
-CREATE TABLE IF NOT EXISTS agent_episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), action_type TEXT NOT NULL, survival_mode TEXT NOT NULL, treasury_usdt REAL NOT NULL DEFAULT 0.0, survival_score REAL NOT NULL DEFAULT 0.0, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', snapshot_json TEXT NOT NULL DEFAULT '{}', outcome_json TEXT NOT NULL DEFAULT '{}', importance_score REAL NOT NULL DEFAULT 0.5, resolved INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_agent_episodes_ts ON agent_episodes(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_agent_episodes_action ON agent_episodes(action_type);
-CREATE INDEX IF NOT EXISTS idx_agent_episodes_mode ON agent_episodes(survival_mode);
-CREATE INDEX IF NOT EXISTS idx_agent_episodes_resolved ON agent_episodes(resolved);
-CREATE TABLE IF NOT EXISTS semantic_patterns (id INTEGER PRIMARY KEY AUTOINCREMENT, pattern_key TEXT NOT NULL UNIQUE, action_type TEXT NOT NULL, condition_json TEXT NOT NULL DEFAULT '{}', sample_size INTEGER NOT NULL DEFAULT 0, positive_count INTEGER NOT NULL DEFAULT 0, negative_count INTEGER NOT NULL DEFAULT 0, neutral_count INTEGER NOT NULL DEFAULT 0, success_rate REAL NOT NULL DEFAULT 0.0, confidence_score REAL NOT NULL DEFAULT 0.0, first_seen TEXT NOT NULL, last_seen TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, last_episode_id_processed INTEGER NOT NULL DEFAULT 0, validated INTEGER NOT NULL DEFAULT 0, validation_score REAL NOT NULL DEFAULT 0.0, last_validated_at TEXT);
-CREATE INDEX IF NOT EXISTS idx_semantic_patterns_key ON semantic_patterns(pattern_key);
-CREATE INDEX IF NOT EXISTS idx_semantic_patterns_active ON semantic_patterns(active);
-CREATE TABLE IF NOT EXISTS memory_advice (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), planner_decision TEXT NOT NULL, memory_decision TEXT NOT NULL, difference_detected INTEGER NOT NULL DEFAULT 0, confidence REAL NOT NULL DEFAULT 0.0, reason_json TEXT NOT NULL DEFAULT '{}');
-CREATE INDEX IF NOT EXISTS idx_memory_advice_ts ON memory_advice(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_memory_advice_diff ON memory_advice(difference_detected);
-CREATE TABLE IF NOT EXISTS memory_injections (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), rule_count INTEGER NOT NULL DEFAULT 0, rules_json TEXT NOT NULL DEFAULT '[]', planner_used_memory INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_memory_injections_ts ON memory_injections(ts DESC);
-CREATE TABLE IF NOT EXISTS memory_attributions (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, plan_id INTEGER REFERENCES agent_plans(id), episode_id INTEGER REFERENCES agent_episodes(id), memory_rules_count INTEGER NOT NULL DEFAULT 0, memory_confidence REAL NOT NULL DEFAULT 0.0, planner_decision TEXT NOT NULL, analyst_consensus TEXT NOT NULL DEFAULT 'unknown', debate_verdict TEXT NOT NULL DEFAULT 'unknown', survival_mode TEXT NOT NULL DEFAULT 'NORMAL', outcome_quality TEXT NOT NULL DEFAULT 'unknown', survival_score_delta REAL NOT NULL DEFAULT 0.0, equity_delta_pct REAL NOT NULL DEFAULT 0.0, memory_contribution_score REAL NOT NULL DEFAULT 0.0, created_at TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS idx_memory_attributions_ts ON memory_attributions(ts DESC);
-CREATE TABLE IF NOT EXISTS shadow_memory_influence (
-    id               INTEGER PRIMARY KEY AUTOINCREMENT,
-    ts               TEXT NOT NULL,
-    plan_id          INTEGER REFERENCES agent_plans(id),
-    planner_action   TEXT NOT NULL,
-    planner_confidence REAL NOT NULL DEFAULT 0.0,
-    memory_action    TEXT NOT NULL,
-    memory_confidence REAL NOT NULL DEFAULT 0.0,
-    agreement        TEXT NOT NULL DEFAULT 'UNKNOWN',
-    influence_weight REAL NOT NULL DEFAULT 0.0,
-    shadow_influence_score REAL NOT NULL DEFAULT 0.0,
-    pattern_ids_json TEXT NOT NULL DEFAULT '[]',
-    validation_scores_json TEXT NOT NULL DEFAULT '[]',
-    survival_mode    TEXT NOT NULL DEFAULT 'NORMAL',
-    analyst_consensus TEXT NOT NULL DEFAULT 'unknown',
-    debate_verdict   TEXT NOT NULL DEFAULT 'unknown',
-    created_at       TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_ts ON shadow_memory_influence(ts DESC);
-CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_agreement ON shadow_memory_influence(agreement);
-CREATE INDEX IF NOT EXISTS idx_shadow_memory_influence_plan ON shadow_memory_influence(plan_id);
-CREATE TABLE IF NOT EXISTS agent_reasoning_audit (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    plan_id INTEGER REFERENCES agent_plans(id),
-    llm_provider TEXT NOT NULL DEFAULT 'unknown',
-    memory_usage_score REAL NOT NULL DEFAULT 0,
-    ml_used INTEGER NOT NULL DEFAULT 0,
-    procedural_used INTEGER NOT NULL DEFAULT 0,
-    episodic_used INTEGER NOT NULL DEFAULT 0,
-    shadow_used INTEGER NOT NULL DEFAULT 0,
-    portfolio_used INTEGER NOT NULL DEFAULT 0,
-    risk_used INTEGER NOT NULL DEFAULT 0,
-    treasury_used INTEGER NOT NULL DEFAULT 0,
-    reasoning_json TEXT NOT NULL DEFAULT '{}',
-    context_size_chars INTEGER NOT NULL DEFAULT 0,
-    latency_ms REAL NOT NULL DEFAULT 0,
-    raw_content_length INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_reasoning_audit_plan ON agent_reasoning_audit(plan_id);
-CREATE INDEX IF NOT EXISTS idx_reasoning_audit_created ON agent_reasoning_audit(created_at DESC);
-CREATE TABLE IF NOT EXISTS agent_reasoning_feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    plan_id INTEGER REFERENCES agent_plans(id),
-    reflection TEXT NOT NULL DEFAULT '',
-    missing_dimensions TEXT NOT NULL DEFAULT '[]',
-    recommended_improvements TEXT NOT NULL DEFAULT '[]',
-    severity TEXT NOT NULL DEFAULT 'info',
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_plan ON agent_reasoning_feedback(plan_id);
-CREATE INDEX IF NOT EXISTS idx_reasoning_feedback_created ON agent_reasoning_feedback(created_at DESC);
-"""
+    def save_trade_replay_summary(self, trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at) -> None:
+        with self._get_conn().cursor() as cur:
+            cur.execute(
+                "INSERT INTO agent_trade_replay_summary (trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,NOW()) ON CONFLICT (trade_id) DO UPDATE SET status=EXCLUDED.status, total_duration_ms=EXCLUDED.total_duration_ms, event_count=EXCLUDED.event_count, updated_at=NOW()",
+                (trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at),
+            )
 
+    def get_trade_replay_events(self, trade_id: str) -> List[Dict[str, Any]]:
+        try:
+            with self._get_conn().cursor() as cur:
+                cur.execute("SELECT * FROM agent_trade_replay_events WHERE trade_id=%s ORDER BY event_index ASC", (trade_id,))
+                rows = cur.fetchall()
+                cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            log.exception("get_trade_replay_events failed")
+            return []
+
+    def get_trade_replay_summary(self, limit: int = 50) -> List[Dict[str, Any]]:
+        try:
+            with self._get_conn().cursor() as cur:
+                cur.execute("SELECT * FROM agent_trade_replay_summary ORDER BY created_at DESC LIMIT %s", (limit,))
+                rows = cur.fetchall()
+                cols = [desc[0] for desc in cur.description]
+            return [dict(zip(cols, r)) for r in rows]
+        except Exception:
+            log.exception("get_trade_replay_summary failed")
+            return []
+
+# ===================== SQLite =====================
 class SQLiteAgentStorage(AgentStorage):
     def __init__(self, db_path: str = "agent/agent.sqlite") -> None:
         self._db_path = db_path
@@ -886,7 +830,6 @@ class SQLiteAgentStorage(AgentStorage):
     def resolve_episode(self, episode_id, outcome_json) -> None:
         with self._con() as con:
             con.execute("UPDATE agent_episodes SET outcome_json=?, resolved=1 WHERE id=?", (outcome_json, episode_id))
-    # ---- Patterns (Phase 7C) ----
     def save_pattern(self, pattern_key, action_type, condition_json, sample_size, positive_count, negative_count, neutral_count, success_rate, confidence_score, last_episode_id_processed=0) -> int:
         with self._con() as con:
             existing = con.execute("SELECT id FROM semantic_patterns WHERE pattern_key=?", (pattern_key,)).fetchone()
@@ -912,13 +855,10 @@ class SQLiteAgentStorage(AgentStorage):
                 row = con.execute("SELECT * FROM semantic_patterns WHERE pattern_key=?", (pattern_key,)).fetchone()
             return dict(row) if row else None
         except Exception: return None
-    # ---- Pattern validation (Phase 7C.2) ----
     def validate_pattern(self, pattern_key: str, validated: bool, validation_score: float) -> None:
         with self._con() as con:
-            con.execute(
-                "UPDATE semantic_patterns SET validated=?, validation_score=?, last_validated_at=?, active=? WHERE pattern_key=?",
-                (1 if validated else 0, validation_score, datetime.now(tz=timezone.utc).isoformat(), 1 if validated else 0, pattern_key),
-            )
+            con.execute("UPDATE semantic_patterns SET validated=?, validation_score=?, last_validated_at=?, active=? WHERE pattern_key=?",
+                        (1 if validated else 0, validation_score, datetime.now(tz=timezone.utc).isoformat(), 1 if validated else 0, pattern_key))
     def get_validated_patterns(self, limit=50) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -926,13 +866,10 @@ class SQLiteAgentStorage(AgentStorage):
                 return [dict(r) for r in con.execute("SELECT * FROM semantic_patterns WHERE validated=1 ORDER BY validation_score DESC LIMIT ?", (limit,)).fetchall()]
         except Exception:
             log.exception("get_validated_patterns failed"); return []
-    # ---- Memory Advice / Sandbox (Phase 7D.0) ----
     def save_memory_advice(self, ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) -> int:
         with self._con() as con:
-            return int(con.execute(
-                "INSERT INTO memory_advice (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) VALUES (?,?,?,?,?,?,?)",
-                (ts.isoformat(), plan_id, planner_decision, memory_decision, 1 if difference_detected else 0, confidence, reason_json),
-            ).lastrowid)
+            return int(con.execute("INSERT INTO memory_advice (ts, plan_id, planner_decision, memory_decision, difference_detected, confidence, reason_json) VALUES (?,?,?,?,?,?,?)",
+                                  (ts.isoformat(), plan_id, planner_decision, memory_decision, 1 if difference_detected else 0, confidence, reason_json)).lastrowid)
     def get_recent_memory_advice(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -947,23 +884,13 @@ class SQLiteAgentStorage(AgentStorage):
                 total = int(row[0]) if row else 0
                 diffs = int(row[1]) if row else 0
                 avg_conf = float(row[2]) if row and row[2] is not None else 0.0
-            return {
-                "advice_count": total,
-                "agreement_count": total - diffs,
-                "disagreement_count": diffs,
-                "agreement_rate": round((total - diffs) / max(1, total), 4),
-                "disagreement_rate": round(diffs / max(1, total), 4),
-                "avg_confidence": round(avg_conf, 4),
-            }
+            return {"advice_count": total, "agreement_count": total - diffs, "disagreement_count": diffs, "agreement_rate": round((total - diffs) / max(1, total), 4), "disagreement_rate": round(diffs / max(1, total), 4), "avg_confidence": round(avg_conf, 4)}
         except Exception:
             return {"advice_count": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_confidence": 0.0}
-    # ---- Memory Injections / Procedural Context (Phase 7D.1) ----
     def save_memory_injection(self, ts, plan_id, rule_count, rules_json) -> int:
         with self._con() as con:
-            return int(con.execute(
-                "INSERT INTO memory_injections (ts, plan_id, rule_count, rules_json, planner_used_memory, created_at) VALUES (?,?,?,?,?,?)",
-                (ts.isoformat(), plan_id, rule_count, rules_json, 0, ts.isoformat()),
-            ).lastrowid)
+            return int(con.execute("INSERT INTO memory_injections (ts, plan_id, rule_count, rules_json, planner_used_memory, created_at) VALUES (?,?,?,?,?,?)",
+                                  (ts.isoformat(), plan_id, rule_count, rules_json, 0, ts.isoformat())).lastrowid)
     def get_recent_memory_injections(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -980,13 +907,10 @@ class SQLiteAgentStorage(AgentStorage):
             return {"injection_count": total, "avg_rules_per_plan": round(avg_rules, 2), "validated_patterns_available": len(self.get_validated_patterns())}
         except Exception:
             return {"injection_count": 0, "avg_rules_per_plan": 0.0, "validated_patterns_available": 0}
-    # ---- Memory Attribution (Phase 7D.2) ----
     def save_attribution(self, ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> int:
         with self._con() as con:
-            return int(con.execute(
-                "INSERT INTO memory_attributions (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ts.isoformat(), plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, ts.isoformat()),
-            ).lastrowid)
+            return int(con.execute("INSERT INTO memory_attributions (ts, plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (ts.isoformat(), plan_id, episode_id, memory_rules_count, memory_confidence, planner_decision, analyst_consensus, debate_verdict, survival_mode, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, ts.isoformat())).lastrowid)
     def get_recent_attributions(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -996,11 +920,8 @@ class SQLiteAgentStorage(AgentStorage):
             log.exception("get_recent_attributions failed"); return []
     def update_attribution(self, episode_id, outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score) -> None:
         with self._con() as con:
-            con.execute(
-                "UPDATE memory_attributions SET outcome_quality=?, survival_score_delta=?, equity_delta_pct=?, memory_contribution_score=? WHERE episode_id=? AND outcome_quality='pending'",
-                (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id),
-            )
-
+            con.execute("UPDATE memory_attributions SET outcome_quality=?, survival_score_delta=?, equity_delta_pct=?, memory_contribution_score=? WHERE episode_id=? AND outcome_quality='pending'",
+                        (outcome_quality, survival_score_delta, equity_delta_pct, memory_contribution_score, episode_id))
     def get_attribution_metrics(self) -> Dict[str, Any]:
         try:
             with self._con() as con:
@@ -1010,25 +931,13 @@ class SQLiteAgentStorage(AgentStorage):
                 pos = int(row[2]) if row else 0
                 neg = int(row[3]) if row else 0
                 neu = int(row[4]) if row else 0
-            return {
-                "total_attributions": total,
-                "average_contribution_score": round(avg_contrib, 4),
-                "memory_success_count": pos,
-                "memory_failure_count": neg,
-                "memory_neutral_count": neu,
-                "memory_alignment_rate": round(pos / max(1, total), 4),
-                "memory_success_rate": round(pos / max(1, pos + neg), 4) if (pos + neg) > 0 else 0.0,
-            }
+            return {"total_attributions": total, "average_contribution_score": round(avg_contrib, 4), "memory_success_count": pos, "memory_failure_count": neg, "memory_neutral_count": neu, "memory_alignment_rate": round(pos / max(1, total), 4), "memory_success_rate": round(pos / max(1, pos + neg), 4) if (pos + neg) > 0 else 0.0}
         except Exception:
             return {"total_attributions": 0, "average_contribution_score": 0.0, "memory_alignment_rate": 0.0, "memory_success_rate": 0.0, "memory_failure_rate": 0.0}
-
-    # ---- Shadow Memory Influence (Phase 8.1) ----
     def save_shadow_memory_influence(self, ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) -> int:
         with self._con() as con:
-            return int(con.execute(
-                "INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (ts.isoformat(), plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict),
-            ).lastrowid)
+            return int(con.execute("INSERT INTO shadow_memory_influence (ts, plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                                  (ts.isoformat(), plan_id, planner_action, planner_confidence, memory_action, memory_confidence, agreement, influence_weight, shadow_influence_score, pattern_ids_json, validation_scores_json, survival_mode, analyst_consensus, debate_verdict)).lastrowid)
     def get_recent_shadow_memory_influence(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -1045,27 +954,14 @@ class SQLiteAgentStorage(AgentStorage):
                 disagrees = int(row[2]) if row else 0
                 avg_shadow = float(row[3]) if row and row[3] is not None else 0.0
                 avg_mem_conf = float(row[4]) if row and row[4] is not None else 0.0
-            return {
-                "total_evaluations": total,
-                "agreement_count": agrees,
-                "disagreement_count": disagrees,
-                "agreement_rate": round(agrees / max(1, total), 4),
-                "disagreement_rate": round(disagrees / max(1, total), 4),
-                "avg_shadow_influence_score": round(avg_shadow, 4),
-                "avg_memory_confidence": round(avg_mem_conf, 4),
-            }
+            return {"total_evaluations": total, "agreement_count": agrees, "disagreement_count": disagrees, "agreement_rate": round(agrees / max(1, total), 4), "disagreement_rate": round(disagrees / max(1, total), 4), "avg_shadow_influence_score": round(avg_shadow, 4), "avg_memory_confidence": round(avg_mem_conf, 4)}
         except Exception:
             return {"total_evaluations": 0, "agreement_count": 0, "disagreement_count": 0, "agreement_rate": 0.0, "disagreement_rate": 0.0, "avg_shadow_influence_score": 0.0, "avg_memory_confidence": 0.0}
-
-    # ---- Reasoning audit / feedback (Phase 9.2/9.3) ----
     def save_reasoning_audit(self, plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars=0, latency_ms=0.0, raw_content_length=0) -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         with self._con() as con:
-            con.execute(
-                "INSERT INTO agent_reasoning_audit (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (plan_id, llm_provider, memory_usage_score, int(ml_used), int(procedural_used), int(episodic_used), int(shadow_used), int(portfolio_used), int(risk_used), int(treasury_used), reasoning_json, context_size_chars, latency_ms, raw_content_length, now),
-            )
-
+            con.execute("INSERT INTO agent_reasoning_audit (plan_id, llm_provider, memory_usage_score, ml_used, procedural_used, episodic_used, shadow_used, portfolio_used, risk_used, treasury_used, reasoning_json, context_size_chars, latency_ms, raw_content_length, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (plan_id, llm_provider, memory_usage_score, int(ml_used), int(procedural_used), int(episodic_used), int(shadow_used), int(portfolio_used), int(risk_used), int(treasury_used), reasoning_json, context_size_chars, latency_ms, raw_content_length, now))
     def get_reasoning_audits(self, limit=20) -> List[Dict[str, Any]]:
         try:
             with self._con() as con:
@@ -1073,7 +969,6 @@ class SQLiteAgentStorage(AgentStorage):
                 return [dict(r) for r in con.execute("SELECT * FROM agent_reasoning_audit ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
         except Exception:
             log.exception("get_reasoning_audits failed"); return []
-
     def get_reasoning_audit_summary(self) -> Dict[str, Any]:
         try:
             with self._con() as con:
@@ -1083,25 +978,50 @@ class SQLiteAgentStorage(AgentStorage):
             counts = [int(v or 0) for v in row[4:11]] if row else [0] * 7
             rates = {name: round(count / max(1, total), 4) for name, count in zip(names, counts)}
             most_ignored = min(rates, key=rates.get) if rates else "unknown"
-            return {
-                "total_audits": total,
-                "avg_memory_usage_score": round(float(row[1] or 0), 4),
-                "avg_context_size_chars": round(float(row[2] or 0), 1),
-                "avg_latency_ms": round(float(row[3] or 0), 1),
-                "most_ignored_dimension": most_ignored,
-                "dimension_usage_rates": rates,
-            }
+            return {"total_audits": total, "avg_memory_usage_score": round(float(row[1] or 0), 4), "avg_context_size_chars": round(float(row[2] or 0), 1), "avg_latency_ms": round(float(row[3] or 0), 1), "most_ignored_dimension": most_ignored, "dimension_usage_rates": rates}
         except Exception:
             log.exception("get_reasoning_audit_summary failed")
             return {"total_audits": 0, "avg_memory_usage_score": 0.0, "avg_context_size_chars": 0.0, "avg_latency_ms": 0.0, "most_ignored_dimension": "unknown", "dimension_usage_rates": {}}
-
     def save_reasoning_feedback(self, plan_id, reflection, missing_dimensions, recommended_improvements, severity="info") -> None:
         now = datetime.now(tz=timezone.utc).isoformat()
         with self._con() as con:
+            con.execute("INSERT INTO agent_reasoning_feedback (plan_id, reflection, missing_dimensions, recommended_improvements, severity, created_at) VALUES (?,?,?,?,?,?)",
+                        (plan_id, reflection, missing_dimensions, recommended_improvements, severity, now))
+
+    # ── Phase 10.5 — Trade Replay ──
+    def save_trade_replay_event(self, trade_id, event_type, event_data, event_index, timestamp="", status="", duration_ms=0.0, provider="", confidence=0.0, latency_ms=0.0, plan_id=0) -> None:
+        with self._con() as con:
+            now = datetime.now(tz=timezone.utc).isoformat()
             con.execute(
-                "INSERT INTO agent_reasoning_feedback (plan_id, reflection, missing_dimensions, recommended_improvements, severity, created_at) VALUES (?,?,?,?,?,?)",
-                (plan_id, reflection, missing_dimensions, recommended_improvements, severity, now),
+                "INSERT INTO agent_trade_replay_events (trade_id, event_type, event_data, event_index, timestamp, status, duration_ms, provider, confidence, latency_ms, plan_id, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                (trade_id, event_type, event_data, event_index, timestamp, status, duration_ms, provider, confidence, latency_ms, plan_id, now),
             )
+
+    def save_trade_replay_summary(self, trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at) -> None:
+        with self._con() as con:
+            now = datetime.now(tz=timezone.utc).isoformat()
+            con.execute(
+                "INSERT OR REPLACE INTO agent_trade_replay_summary (trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (trade_id, contract, side, plan_id, llm_provider, status, total_duration_ms, event_count, created_at, now),
+            )
+
+    def get_trade_replay_events(self, trade_id: str) -> List[Dict[str, Any]]:
+        try:
+            with self._con() as con:
+                con.row_factory = sqlite3.Row
+                return [dict(r) for r in con.execute("SELECT * FROM agent_trade_replay_events WHERE trade_id=? ORDER BY event_index ASC", (trade_id,)).fetchall()]
+        except Exception:
+            log.exception("get_trade_replay_events failed")
+            return []
+
+    def get_trade_replay_summary(self, limit: int = 50) -> List[Dict[str, Any]]:
+        try:
+            with self._con() as con:
+                con.row_factory = sqlite3.Row
+                return [dict(r) for r in con.execute("SELECT * FROM agent_trade_replay_summary ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()]
+        except Exception:
+            log.exception("get_trade_replay_summary failed")
+            return []
 
 # ===================== Factory =====================
 def make_storage() -> AgentStorage:
