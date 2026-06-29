@@ -231,6 +231,28 @@ CREATE INDEX IF NOT EXISTS idx_agent_orders_order_id ON agent_orders(order_id);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_contract ON agent_orders(contract);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_status ON agent_orders(status);
 CREATE INDEX IF NOT EXISTS idx_agent_orders_created ON agent_orders(created_at DESC);
+
+-- Phase 9.2 — LLM Reasoning Audit
+CREATE TABLE IF NOT EXISTS agent_reasoning_audit (
+    id SERIAL PRIMARY KEY,
+    plan_id INTEGER REFERENCES agent_plans(id),
+    llm_provider TEXT NOT NULL DEFAULT 'unknown',
+    memory_usage_score DOUBLE PRECISION NOT NULL DEFAULT 0,
+    ml_used BOOLEAN NOT NULL DEFAULT FALSE,
+    procedural_used BOOLEAN NOT NULL DEFAULT FALSE,
+    episodic_used BOOLEAN NOT NULL DEFAULT FALSE,
+    shadow_used BOOLEAN NOT NULL DEFAULT FALSE,
+    portfolio_used BOOLEAN NOT NULL DEFAULT FALSE,
+    risk_used BOOLEAN NOT NULL DEFAULT FALSE,
+    treasury_used BOOLEAN NOT NULL DEFAULT FALSE,
+    reasoning_json JSONB NOT NULL DEFAULT '{}',
+    context_size_chars INTEGER NOT NULL DEFAULT 0,
+    latency_ms DOUBLE PRECISION NOT NULL DEFAULT 0,
+    raw_content_length INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reasoning_audit_plan ON agent_reasoning_audit(plan_id);
+CREATE INDEX IF NOT EXISTS idx_reasoning_audit_created ON agent_reasoning_audit(created_at DESC);
 """
 # ===================== PostgreSQL =====================
 class PostgresAgentStorage(AgentStorage):
