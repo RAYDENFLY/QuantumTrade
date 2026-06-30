@@ -1,4 +1,4 @@
-# QuantumTrade
+# Astel Research - TradingAgents
 
 **Autonomous AI-Powered Cryptocurrency Futures Trading System**
 
@@ -7,7 +7,7 @@
 [![Python](https://img.shields.io/badge/Python-3.11%2B-brightgreen)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)]()
 
-QuantumTrade is an autonomous AI trading system that combines **machine learning predictions**, **episodic memory**, **procedural memory**, **LLM reasoning**, and a **self-reflection feedback loop** to make and execute trading decisions on Gate.io Futures (Testnet).
+Astel Research - TradingAgents is an autonomous AI trading system that combines **machine learning predictions**, **episodic memory**, **procedural memory**, **LLM reasoning**, and a **self-reflection feedback loop** to make and execute trading decisions on Gate.io Futures (Testnet).
 
 The system operates continuously, learning from every trade through a multi-layered memory architecture and improving its decision quality over time through reinforcement-based pattern validation and self-reflection.
 
@@ -15,7 +15,7 @@ The system operates continuously, learning from every trade through a multi-laye
 
 ## Overview
 
-QuantumTrade is built on the philosophy that successful autonomous trading requires more than a single ML model. It needs:
+Astel Research - TradingAgents is built on the philosophy that successful autonomous trading requires more than a single ML model. It needs:
 
 1. **Market Perception** — Feature engineering and ML prediction models that detect market regimes and generate probabilistic forecasts.
 2. **Memory** — A structured memory system that stores what worked, what didn't, and why, across three dimensions: procedural rules, episodic experiences, and shadow validation.
@@ -168,7 +168,7 @@ Two database tables with full indexing:
 
 ## AI Memory Architecture
 
-QuantumTrade implements a multi-layered memory system inspired by cognitive architectures:
+Astel Research - TradingAgents implements a multi-layered memory system inspired by cognitive architectures:
 
 ### Procedural Memory (Phase 7D.1)
 
@@ -276,7 +276,7 @@ Agent Tick (every 300s)
 
 ## Execution Model
 
-QuantumTrade maintains a **single execution owner** architecture. The only process that can submit orders to Gate.io is `AutonomousAgent` via `ExecutionEngine` → `GateExecutor`.
+Astel Research - TradingAgents maintains a **single execution owner** architecture. The only process that can submit orders to Gate.io is `AutonomousAgent` via `ExecutionEngine` → `GateExecutor`.
 
 ```
 live_runner.py (launcher only)
@@ -327,7 +327,7 @@ All dashboards are served by a FastAPI application at `dashboard/app.py`.
 ## Project Structure
 
 ```
-QuantumTrade/
+Astel Research - TradingAgents/
 │
 ├── live_runner.py              # Runtime launcher (single entry point)
 ├── requirements.txt            # Python dependencies
@@ -598,7 +598,7 @@ python agent/phase10_6_validation.py
 
 MIT License
 
-Copyright (c) 2026 QuantumTrade
+Copyright (c) 2026 Astel Research - TradingAgents
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

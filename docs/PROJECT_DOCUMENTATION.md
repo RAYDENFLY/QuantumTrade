@@ -1,13 +1,13 @@
-# QuantumTrade — Project Documentation (Lengkap)
+# Astel Research - TradingAgents — Project Documentation (Lengkap)
 
-> Dokumen ini dibuat untuk menjelaskan **QuantumTrade** secara end-to-end (offline + live), termasuk arsitektur, alur data, modul utama, kontrak API/WebSocket, skema database SQLite, dan panduan menjalankan sistem.  
+> Dokumen ini dibuat untuk menjelaskan **Astel Research - TradingAgents** secara end-to-end (offline + live), termasuk arsitektur, alur data, modul utama, kontrak API/WebSocket, skema database SQLite, dan panduan menjalankan sistem.  
 > Fokus utamanya adalah **engineering system + auditability + monitoring**, bukan janji profit.
 
 ---
 
 ## 0) Ringkasan satu paragraf
 
-**QuantumTrade** adalah sistem trading kuantitatif yang **config-driven** (dikontrol oleh `quant_system/config.yaml`) dengan dua mode:
+**Astel Research - TradingAgents** adalah sistem trading kuantitatif yang **config-driven** (dikontrol oleh `quant_system/config.yaml`) dengan dua mode:
 
 - **Offline mode**: mengambil/menyiapkan dataset OHLCV (dari CSV cache), melakukan feature engineering, melatih model Machine Learning (LightGBM), dan melakukan evaluasi/backtest sederhana.
 - **Live mode**: membaca candle **4H yang baru selesai (close)** dari Gate.io USDT Futures, membuat sinyal, mengeksekusi order futures, memasang **TP/SL** sebagai trigger orders di exchange, lalu mencatat seluruh aktivitas ke **SQLite journal** dan menampilkannya pada **dashboard web** (FastAPI + UI).
@@ -40,7 +40,7 @@
 ## 2) Struktur folder (high-level)
 
 ```
-QuantumTrade/
+Astel Research - TradingAgents/
   quant_system/
     config.yaml
     execution/
@@ -328,7 +328,7 @@ Message error:
 ### 8.1 Menjalankan dashboard
 
 ```powershell
-cd "D:\Data Ray\QuantumTrade"
+cd "D:\Data Ray\Astel Research - TradingAgents"
 python -m uvicorn dashboard.app:app --reload --port 8000
 ```
 
@@ -339,14 +339,14 @@ Buka:
 ### 8.2 Menjalankan live runner
 
 ```powershell
-cd "D:\Data Ray\QuantumTrade"
+cd "D:\Data Ray\Astel Research - TradingAgents"
 python live_runner.py
 ```
 
 ### 8.3 Training dari Gate candles + cache ke CSV
 
 ```powershell
-cd "D:\Data Ray\QuantumTrade"
+cd "D:\Data Ray\Astel Research - TradingAgents"
 python scripts\train_from_gate.py
 ```
 

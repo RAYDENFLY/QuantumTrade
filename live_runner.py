@@ -1,7 +1,7 @@
 """
-Phase 10.6C — QuantumTrade Runtime Launcher
+Phase 10.6C — Astel Research - TradingAgents Runtime Launcher
 
-This file is the SINGLE entry point for running QuantumTrade.
+This file is the SINGLE entry point for running Astel Research - TradingAgents.
 
 It does NOT execute trades directly.
 
@@ -171,7 +171,7 @@ def main() -> None:
 
     log = logging.getLogger("live_runner")
     log.info("=" * 60)
-    log.info("QuantumTrade Launcher starting...")
+    log.info("Astel Research - TradingAgents Launcher starting...")
     log.info("=" * 60)
     log.info("Config path: %s", config_path)
 
@@ -219,7 +219,7 @@ def main() -> None:
     except ImportError as e:
         log.exception("Failed to import agent modules: %s", e)
         log.error("Make sure you are running from the project root directory.")
-        log.error("  cd d:\\Data Ray\\QuantumTrade && python live_runner.py")
+        log.error("  cd d:\\Data Ray\\Astel Research - TradingAgents && python live_runner.py")
         sys.exit(1)
     except Exception as e:
         log.exception("AutonomousAgent failed to start or crashed: %s", e)
@@ -228,7 +228,7 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Graceful shutdown (reached when agent.run() returns)
     # ------------------------------------------------------------------
-    log.warning("QuantumTrade shutdown complete.")
+    log.warning("Astel Research - TradingAgents shutdown complete.")
     log.info("=" * 60)
 
 

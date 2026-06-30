@@ -94,7 +94,7 @@ def _db_path(cfg: Dict[str, Any]) -> str:
     return str((ROOT / rel).resolve())
 
 
-app = FastAPI(title="QuantumTrade Dashboard", version="0.1.0")
+app = FastAPI(title="Astel Research - TradingAgents Dashboard", version="0.1.0")
 
 
 @app.get("/api/docs/summary")
