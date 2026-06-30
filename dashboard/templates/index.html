@@ -342,27 +342,64 @@ x<!doctype html>
             <i class="fa-solid fa-flag-checkered mr-2 text-emerald-400"></i>
             Recent Closures (Realized)
           </h2>
-          <div class="text-xs text-slate-400" id="closures_count">—</div>
+          <div class="flex items-center gap-3">
+            <span class="text-xs text-slate-400" id="closures_count">—</span>
+          </div>
+        </div>
+        <!-- Filters -->
+        <div class="flex flex-wrap items-center gap-3 mb-3">
+          <input id="closures_filter_contract" type="text" placeholder="Filter contract..." class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200 w-32" oninput="applyClosuresFilters()" />
+          <select id="closures_filter_side" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200" onchange="applyClosuresFilters()">
+            <option value="">All sides</option>
+            <option value="BUY">BUY</option>
+            <option value="SELL">SELL</option>
+            <option value="LONG">LONG</option>
+            <option value="SHORT">SHORT</option>
+          </select>
+          <select id="closures_filter_pnl" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200" onchange="applyClosuresFilters()">
+            <option value="">All PnL</option>
+            <option value="win">WIN</option>
+            <option value="loss">LOSS</option>
+          </select>
+          <span class="text-xs text-slate-500" id="closures_showing">—</span>
         </div>
         <div class="overflow-x-auto">
           <table class="min-w-full text-sm">
             <thead class="text-slate-300">
               <tr class="border-b border-slate-800">
                 <th class="text-left py-2 pr-4">Time</th>
-                <th class="text-left py-2 px-4">Asset</th>
+                <th class="text-left py-2 px-4">Contract</th>
+                <th class="text-left py-2 px-4">Side</th>
                 <th class="text-left py-2 px-4">Reason</th>
                 <th class="text-right py-2 px-4">Qty</th>
                 <th class="text-right py-2 px-4">Entry</th>
                 <th class="text-right py-2 px-4">Exit</th>
                 <th class="text-right py-2 px-4">Fees</th>
                 <th class="text-right py-2 px-4">PnL</th>
-                <th class="text-left py-2 pl-4">Exit Order</th>
+                <th class="text-left py-2 pl-4">Exchange Order ID</th>
               </tr>
             </thead>
             <tbody id="closures_tbody" class="font-mono text-slate-100"></tbody>
           </table>
         </div>
-        <div class="text-xs text-slate-500 mt-2">These rows come from SQLite table <span class="font-mono">trade_closures</span>.</div>
+        <!-- Pagination -->
+        <div class="flex items-center justify-between mt-3 flex-wrap gap-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-500">Rows:</span>
+            <select id="closures_page_size" class="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-xs text-slate-200" onchange="updateClosuresPageSize()">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="25">25</option>
+              <option value="50">50</option>
+            </select>
+          </div>
+          <div class="flex items-center gap-1">
+            <button id="closures_prev" class="px-3 py-1 text-xs rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed" onclick="changeClosuresPage(-1)">← Prev</button>
+            <span id="closures_page_info" class="text-xs text-slate-400 px-2">Page 1</span>
+            <button id="closures_next" class="px-3 py-1 text-xs rounded bg-slate-800 border border-slate-700 text-slate-300 hover:bg-slate-700 disabled:opacity-40 disabled:cursor-not-allowed" onclick="changeClosuresPage(1)">Next →</button>
+          </div>
+        </div>
+        <div class="text-xs text-slate-500 mt-2">Source: <span class="font-mono">agent_trade_replay_events</span> (real exchange data).</div>
       </section>
 
       <footer class="text-xs text-slate-500 py-2">
@@ -1082,40 +1119,69 @@ x<!doctype html>
         }
       }
 
-      async function loadClosures() {
-        const r = await fetch("/api/closures");
-        if (!r.ok) throw new Error("/api/closures failed");
-        const d = await r.json();
-        const rows = d.closures || [];
+      // ── Closures pagination state ──
+      let _allClosures = [];
+      let _closuresPage = 0;
+      let _closuresPageSize = 5;
 
-        document.getElementById("closures_count").textContent = rows.length + " rows";
+      function renderClosuresPage() {
+        const filterContract = (document.getElementById("closures_filter_contract")?.value || "").toLowerCase().trim();
+        const filterSide = document.getElementById("closures_filter_side")?.value || "";
+        const filterPnl = document.getElementById("closures_filter_pnl")?.value || "";
+
+        let filtered = _allClosures;
+        if (filterContract) {
+          filtered = filtered.filter(c => (c.contract || "").toLowerCase().includes(filterContract));
+        }
+        if (filterSide) {
+          filtered = filtered.filter(c => (c.side || "").toUpperCase() === filterSide);
+        }
+        if (filterPnl === "win") {
+          filtered = filtered.filter(c => Number(c.realized_pnl) > 0);
+        } else if (filterPnl === "loss") {
+          filtered = filtered.filter(c => Number(c.realized_pnl) < 0);
+        }
+
+        const totalPages = Math.max(1, Math.ceil(filtered.length / _closuresPageSize));
+        _closuresPage = Math.min(_closuresPage, totalPages - 1);
+        if (_closuresPage < 0) _closuresPage = 0;
+
+        const start = _closuresPage * _closuresPageSize;
+        const end = Math.min(start + _closuresPageSize, filtered.length);
+        const pageRows = filtered.slice(start, end);
 
         const tbody = document.getElementById("closures_tbody");
         tbody.innerHTML = "";
 
-        for (const c of rows) {
+        for (const c of pageRows) {
           const tr = document.createElement("tr");
           tr.className = "border-b border-slate-800/60";
 
-          const ts = c.timestamp ?? "—";
-          const asset = c.asset ?? "—";
+          const ts = c.created_at ?? c.closed_at ?? "—";
+          const contract = c.contract ?? "—";
+          const side = c.side ?? "—";
           const reason = c.exit_reason ?? "—";
-          const qty = c.qty ?? "—";
+          const qty = c.exit_size ?? "—";
           const entry = c.entry_price ?? null;
           const exit = c.exit_price ?? null;
           const fees = c.fees ?? null;
-          const pnl = c.pnl ?? null;
-          const oid = c.exit_order_id ?? null;
+          const pnl = c.realized_pnl ?? null;
+          const oid = c.exchange_order_id ?? null;
 
           const tdTime = document.createElement("td");
           tdTime.className = "text-left py-2 pr-4 whitespace-nowrap font-sans";
           tdTime.textContent = String(ts).replace("T", " ").replace("+00:00", "Z");
           tr.appendChild(tdTime);
 
-          const tdAsset = document.createElement("td");
-          tdAsset.className = "text-left py-2 px-4 whitespace-nowrap font-sans";
-          tdAsset.textContent = asset;
-          tr.appendChild(tdAsset);
+          const tdContract = document.createElement("td");
+          tdContract.className = "text-left py-2 px-4 whitespace-nowrap font-sans";
+          tdContract.textContent = contract;
+          tr.appendChild(tdContract);
+
+          const tdSide = document.createElement("td");
+          tdSide.className = "text-left py-2 px-4 whitespace-nowrap font-sans";
+          tdSide.textContent = side;
+          tr.appendChild(tdSide);
 
           const tdReason = document.createElement("td");
           tdReason.className = "text-left py-2 px-4 whitespace-nowrap font-sans text-slate-300";
@@ -1141,6 +1207,41 @@ x<!doctype html>
 
           tbody.appendChild(tr);
         }
+
+        // Update counts and pagination
+        document.getElementById("closures_count").textContent = filtered.length + " rows";
+        document.getElementById("closures_showing").textContent = filtered.length > 0
+          ? `Showing ${start + 1}–${end} of ${filtered.length}`
+          : "No matches";
+        document.getElementById("closures_page_info").textContent = `Page ${_closuresPage + 1} of ${totalPages}`;
+        document.getElementById("closures_prev").disabled = _closuresPage <= 0;
+        document.getElementById("closures_next").disabled = _closuresPage >= totalPages - 1;
+      }
+
+      function applyClosuresFilters() {
+        _closuresPage = 0;
+        renderClosuresPage();
+      }
+
+      function changeClosuresPage(delta) {
+        _closuresPage += delta;
+        renderClosuresPage();
+      }
+
+      function updateClosuresPageSize() {
+        const sel = document.getElementById("closures_page_size");
+        _closuresPageSize = parseInt(sel.value) || 5;
+        _closuresPage = 0;
+        renderClosuresPage();
+      }
+
+      async function loadClosures() {
+        const r = await fetch("/api/replay/closures");
+        if (!r.ok) throw new Error("/api/replay/closures failed");
+        const d = await r.json();
+        _allClosures = d.closures || [];
+        _closuresPage = 0;
+        renderClosuresPage();
       }
 
       async function refresh() {
