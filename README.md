@@ -12,6 +12,7 @@
 [![Exchange](https://img.shields.io/badge/Exchange-Gate.io%20Testnet-green)]()
 [![Python](https://img.shields.io/badge/Python-3.11%2B-brightgreen)]()
 [![License](https://img.shields.io/badge/License-MIT-yellow)]()
+[![Release](https://img.shields.io/github/v/release/RAYDENFLY/Astel?include_prereleases)](https://github.com/RAYDENFLY/Astel/releases)
 
 Astel Research - TradingAgents is an autonomous AI trading system that combines **machine learning predictions**, **episodic memory**, **procedural memory**, **LLM reasoning**, and a **self-reflection feedback loop** to make and execute trading decisions on Gate.io Futures (Testnet).
 
