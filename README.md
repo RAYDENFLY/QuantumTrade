@@ -20,6 +20,12 @@ The system operates continuously, learning from every trade through a multi-laye
 
 ---
 
+> **Creator & Lead Researcher:** Azis Maulana Suhada  
+> **Institution:** PT Authentic Media Servicex  
+> **Research Areas:** Autonomous AI Agents • Quantitative Trading • Machine Learning • LLM Systems
+
+---
+
 ## Overview
 
 Astel Research - TradingAgents is built on the philosophy that successful autonomous trading requires more than a single ML model. It needs:
