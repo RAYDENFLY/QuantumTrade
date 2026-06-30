@@ -120,13 +120,16 @@ class TradeRecorder:
     # Lifecycle: Stage 1 — Market Snapshot
     # ------------------------------------------------------------------
 
-    def record_market_snapshot(self, trade_id: str, snapshot: Dict[str, Any]) -> None:
+    def record_market_snapshot(self, trade_id: str, snapshot: Optional[Dict[str, Any]]) -> None:
         """Stage 1: Market snapshot at decision time."""
+        if snapshot is None:
+            snapshot = {}
+        account = snapshot.get("account") or {}
         self._record_event(trade_id, "market_snapshot", {
-            "equity": snapshot.get("account", {}).get("equity"),
-            "drawdown": snapshot.get("account", {}).get("drawdown_pct"),
-            "exposure": snapshot.get("account", {}).get("exposure_x"),
-            "open_positions": snapshot.get("account", {}).get("open_positions"),
+            "equity": account.get("equity"),
+            "drawdown": account.get("drawdown_pct"),
+            "exposure": account.get("exposure_x"),
+            "open_positions": account.get("open_positions"),
             "treasury": snapshot.get("treasury_usdt"),
             "survival_mode": snapshot.get("survival_mode"),
         })

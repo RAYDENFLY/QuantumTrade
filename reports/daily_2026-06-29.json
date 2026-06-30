@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-06-29T23:57:07.708338+00:00",
+  "day": "2026-06-29",
+  "trading": {
+    "total_trades": 0,
+    "closed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0.0
+  },
+  "ai": {
+    "memory_usage_score": 0.0,
+    "avg_latency_ms": 0.0,
+    "total_audits": 0,
+    "patterns_mined": 0,
+    "patterns_validated": 0,
+    "most_ignored_dimension": "unknown"
+  },
+  "execution": {
+    "total_actions": 3,
+    "successful": 3,
+    "failed": 0,
+    "success_rate": 100.0
+  },
+  "memory": {
+    "episodes_created": 0,
+    "episodes_resolved": 0,
+    "memory_contribution": 0.0,
+    "shadow_agreement_rate": 0.0,
+    "shadow_influence": 0.0
+  },
+  "replay": {
+    "trades_recorded": 0,
+    "total_events": 0,
+    "avg_events_per_trade": 0.0
+  },
+  "llm": {
+    "total_llm_calls": 0,
+    "provider_breakdown": {},
+    "avg_latency_ms": 0.0
+  },
+  "infrastructure": {
+    "storage_type": "SQLite",
+    "status": "healthy",
+    "errors_last_24h": 0
+  },
+  "health": {
+    "status": "HEALTHY",
+    "error_count": 0,
+    "error_sections": []
+  }
+}
