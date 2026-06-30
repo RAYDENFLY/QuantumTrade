@@ -1,4 +1,4 @@
-![Astel](https://github.com/RAYDENFLY/Astel/blob/main/assets/logo/astel-logo.png)
+![Astel](https://github.com/RAYDENFLY/Astel/blob/main/assets/logo/astel-text.png)
 
 # Astel Research - TradingAgents
 
