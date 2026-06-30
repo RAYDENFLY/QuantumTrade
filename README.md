@@ -18,12 +18,12 @@ Astel Research - TradingAgents is an autonomous AI trading system that combines 
 
 The system operates continuously, learning from every trade through a multi-layered memory architecture and improving its decision quality over time through reinforcement-based pattern validation and self-reflection.
 
----
 
 **Creator & Lead Researcher:** [Azis Maulana Suhada](https://raydenfly.my.id)  
 **Developed by:** PT Authentic Media Servicex  
 **Research Areas:** Autonomous AI Agents • Quantitative Trading • Machine Learning • Large Language Models (LLMs)
 
+---
 ## Overview
 
 Astel Research - TradingAgents is built on the philosophy that successful autonomous trading requires more than a single ML model. It needs:
