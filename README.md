@@ -23,7 +23,6 @@ The system operates continuously, learning from every trade through a multi-laye
 > **Creator & Lead Researcher:** [Azis Maulana Suhada](https://raydenfly.my.id)  
 > **Developed by:** PT Authentic Media Servicex  
 > **Research Areas:** Autonomous AI Agents • Quantitative Trading • Machine Learning • Large Language Models (LLMs)
----
 
 ## Overview
 
